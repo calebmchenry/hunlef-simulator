@@ -1,0 +1,18 @@
+{
+  "id": 1712,
+  "rotation": 0,
+  "textureToFind": [],
+  "textureToReplace": [],
+  "animationId": 8756,
+  "recolorToFind": [
+    65432
+  ],
+  "recolorToReplace": [
+    16
+  ],
+  "resizeX": 80,
+  "resizeY": 80,
+  "modelId": 40670,
+  "ambient": 30,
+  "contrast": 40
+}

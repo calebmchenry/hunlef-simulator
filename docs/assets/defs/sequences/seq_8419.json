@@ -1,0 +1,41 @@
+{
+  "id": 8419,
+  "frameLengths": [
+    2,
+    2,
+    3,
+    4,
+    5,
+    4,
+    3,
+    2,
+    2,
+    2
+  ],
+  "frameIDs": [
+    423821313,
+    423821314,
+    423821315,
+    423821322,
+    423821316,
+    423821317,
+    423821318,
+    423821319,
+    423821320,
+    423821321
+  ],
+  "frameStep": -1,
+  "interleaveLeave": [],
+  "stretches": false,
+  "forcedPriority": 6,
+  "leftHandItem": -1,
+  "rightHandItem": -1,
+  "maxLoops": 99,
+  "precedenceAnimating": -1,
+  "priority": -1,
+  "replyMode": 2,
+  "chatFrameIds": [],
+  "frameSounds": [],
+  "animMayaID": -1,
+  "animMayaMasks": []
+}

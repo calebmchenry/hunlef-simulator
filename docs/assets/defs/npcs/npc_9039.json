@@ -1,0 +1,67 @@
+{
+  "id": 9039,
+  "models": [
+    38601
+  ],
+  "size": 1,
+  "standingAnimation": 8423,
+  "walkingAnimation": 8423,
+  "rotateLeftAnimation": -1,
+  "rotateRightAnimation": -1,
+  "rotate180Animation": -1,
+  "rotate90LeftAnimation": -1,
+  "rotate90RightAnimation": -1,
+  "category": 1390,
+  "actions": [],
+  "recolorToFind": [
+    48064,
+    29390,
+    29656,
+    29526,
+    29632
+  ],
+  "recolorToReplace": [
+    65459,
+    712,
+    728,
+    728,
+    962
+  ],
+  "retextureToFind": [],
+  "retextureToReplace": [],
+  "chatheadModels": [],
+  "isMinimapVisible": true,
+  "combatLevel": 1,
+  "heightScale": 88,
+  "renderPriority": 1,
+  "ambient": 10,
+  "contrast": 44,
+  "headIconArchiveIds": [],
+  "headIconSpriteIndex": [],
+  "rotationSpeed": 0,
+  "varbitId": -1,
+  "varpIndex": -1,
+  "configs": [],
+  "isInteractable": false,
+  "rotationFlag": true,
+  "runAnimation": -1,
+  "runRotate180Animation": -1,
+  "runRotateLeftAnimation": -1,
+  "runRotateRightAnimation": -1,
+  "crawlAnimation": -1,
+  "crawlRotate180Animation": -1,
+  "crawlRotateLeftAnimation": -1,
+  "crawlRotateRightAnimation": -1,
+  "params": {
+    "46": -1
+  },
+  "height": -1,
+  "stats": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ]
+}

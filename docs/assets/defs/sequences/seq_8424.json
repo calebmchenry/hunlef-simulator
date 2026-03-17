@@ -1,0 +1,33 @@
+{
+  "id": 8424,
+  "frameLengths": [
+    5,
+    5,
+    5,
+    5,
+    5,
+    5
+  ],
+  "frameIDs": [
+    423886857,
+    423886858,
+    423886859,
+    423886860,
+    423886850,
+    423886851
+  ],
+  "frameStep": -1,
+  "interleaveLeave": [],
+  "stretches": false,
+  "forcedPriority": 5,
+  "leftHandItem": -1,
+  "rightHandItem": -1,
+  "maxLoops": 99,
+  "precedenceAnimating": -1,
+  "priority": -1,
+  "replyMode": 2,
+  "chatFrameIds": [],
+  "frameSounds": [],
+  "animMayaID": -1,
+  "animMayaMasks": []
+}

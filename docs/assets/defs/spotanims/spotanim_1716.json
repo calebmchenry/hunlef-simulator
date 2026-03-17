@@ -1,0 +1,22 @@
+{
+  "id": 1716,
+  "rotation": 0,
+  "textureToFind": [],
+  "textureToReplace": [],
+  "animationId": 693,
+  "recolorToFind": [
+    7104,
+    6080,
+    960
+  ],
+  "recolorToReplace": [
+    58328,
+    58310,
+    58299
+  ],
+  "resizeX": 96,
+  "resizeY": 96,
+  "modelId": 3116,
+  "ambient": 20,
+  "contrast": 40
+}

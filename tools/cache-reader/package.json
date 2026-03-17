@@ -1,0 +1,17 @@
+{
+  "name": "cache-reader",
+  "version": "1.0.0",
+  "description": "",
+  "main": "extract.mjs",
+  "scripts": {
+    "extract": "node extract.mjs",
+    "test": "node extract.mjs --help"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "lodash": "^4.17.23",
+    "osrscachereader": "^1.1.3"
+  }
+}
