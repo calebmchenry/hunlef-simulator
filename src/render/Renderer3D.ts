@@ -30,7 +30,6 @@ const HALF_GRID = GRID_SIZE / 2; // 6
 const BOSS_MODEL_SCALE = 5 / 675;
 const PLAYER_MODEL_SCALE = 1 / 200;
 const TORNADO_MODEL_SCALE = 1 / 674; // tornado model is 674 OSRS units wide, target ~1 tile
-const BOSS_MORPH_INFLUENCE_SCALE = 0.5;
 const BOSS_MODEL_YAW_OFFSET = 0; // atan2(dx,dz) already faces +Z toward player
 const PLAYER_MODEL_YAW_OFFSET = 0; // same correction for player model
 const PLAYER_OVERHEAD_Y = 1.1;
@@ -889,18 +888,6 @@ export class Renderer3D {
     if (this.animController) {
       this.animController.update(dt);
       this.updateBossAnimations(sim);
-
-      // Scale down boss morph target influences to reduce "exploded" look during attacks
-      this.bossGroup.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-          const mesh = child as THREE.Mesh;
-          if (mesh.morphTargetInfluences) {
-            for (let i = 0; i < mesh.morphTargetInfluences.length; i++) {
-              mesh.morphTargetInfluences[i] *= BOSS_MORPH_INFLUENCE_SCALE;
-            }
-          }
-        }
-      });
     }
 
     // Update entities
