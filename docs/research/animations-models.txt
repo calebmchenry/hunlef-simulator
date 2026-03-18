@@ -1,0 +1,437 @@
+# Animations and Modeling in Old School RuneScape: Formats, Cache Architecture, and Runtime Playback
+
+## Executive summary
+
+Old School RuneScape (OSRS) does not use off-the-shelf 3D interchange formats (FBX, COLLADA, etc.) at runtime. Instead, its client consumes a proprietary asset set packaged inside the “Jagex cache” (a JS5-managed asset system stored locally as `main_file_cache.dat2` plus many `main_file_cache.idx*` index files). Community reverse-engineering and open-source tooling provide the clearest view of the formats and algorithms because Jagex has not publicly documented the binary model/animation formats in a formal spec. citeturn46view0turn33search11turn28search1
+
+At a high level, OSRS’s animation system is “frame + skeleton map + sequence definition”: a **sequence** (animation definition) references a list of **frame IDs** and **frame lengths**, and each **frame** references a **framemap** (often called a skeleton map) that encodes transform types and which vertex-groups are affected. Frame transforms are applied to rigid vertex groups (non-weighted, “vertex belongs to a group”) by per-group translation/rotation/scale operations, producing animated vertex positions that are then rendered. This is directly visible in client-derived implementations (e.g., OSRS Cache Reader’s `loadFrame()`/`animate()` implementation). citeturn25view0turn24view0turn26search7
+
+The cache is organized into indices (also called “archives” in some libraries, but terminology differs), and modern tooling typically names the relevant OSRS indices as: **ANIMATIONS/FRAMES (0)**, **SKELETONS/FRAMEMAPS (1)**, **CONFIGS (2)**, and **MODELS (7)** (plus many others). This mapping is explicitly enumerated in RuneLite’s cache tooling. citeturn14view0
+
+The largest practical “spec” for OSRS modeling/animation today is the ecosystem of tooling: RuneLite’s cache library and API docs, OSRS Cache Reader (JavaScript + glTF export helpers), OpenRS2 (cache archive + JS5 tooling), and general-purpose cache libraries like `rs-cache-library` (Kotlin). citeturn27search1turn28search0turn33search11turn46view1
+
+On legality/ethics: Jagex’s legal terms assert Jagex’s ownership of game content and restrict unauthorized clients/emulators; Jagex also publishes official rules restricting “macro and client features” that generate input, modify applets, or directly communicate with game worlds unless in the approved client list. Practically, safe community practice is to treat cache extraction as personal research, avoid redistributing copyrighted assets, and stay within approved-client/plugin rules if interacting with the live game. citeturn35view3turn43search0turn32search3
+
+## Asset storage and cache architecture
+
+OSRS assets live in the “Jagex cache”, downloaded/updated in the background and stored on disk; Jagex support articles describe the cache as local files that may be cleared to force re-download if corrupted. citeturn34search3turn34search14 The native storage format used by many RuneScape-era clients is a large data file (commonly `main_file_cache.dat2`) plus many `.idx*` index files. citeturn46view0turn46view2
+
+### Physical layout, indices, and the “root reference table”
+
+A useful, widely-cited abstraction is:
+
+- `main_file_cache.dat2`: holds the raw data blocks/sectors for stored groups/files.
+- `main_file_cache.idxN`: per-index tables that locate data in `dat2`.
+- `main_file_cache.idx255`: “root reference table” / master index metadata (index-of-indices). A C++ cache library describes `.idx255` as “special” and explicitly calls it the root reference table. citeturn46view0
+
+This “index → folder/archive → file” hierarchy is described by libraries designed specifically for RuneScape cache filesystems. citeturn46view0turn46view1
+
+### JS5 and OpenRS2’s framing
+
+OpenRS2 characterizes its archive as covering caches for versions that use **JS5 (and a precursor)** to manage assets, and notes it can convert caches to the client-native `.dat2/.idx` format on demand. citeturn33search11 This matters because most modern OSRS cache research flows either from a local cache directory or from OpenRS2-provided cache snapshots.
+
+### Relevant cache indices for models and animations
+
+Different projects use slightly different naming for “frame”, “framemap”, “skeleton”, etc., but RuneLite’s cache tooling provides an explicit enumeration of OSRS index IDs (including animation and model-related indices). citeturn14view0 A commonly used subset:
+
+| Cache index (ID) | RuneLite cache name | What it contains (model/anim relevant) | Notes |
+|---|---|---|---|
+| 0 | `ANIMATIONS` | Frame data (“frames”) used by sequences | Frames reference a framemap/skeleton map. citeturn25view0turn24view0 |
+| 1 | `SKELETONS` | Framemap/skeleton-map definitions | Stores transform types and group mappings; can include an “animaya skeleton” structure. citeturn28search2turn24view0 |
+| 2 | `CONFIGS` | Config groups, incl. `SEQUENCE` (animation definitions) | Sequence definitions contain frame IDs/lengths/sounds. citeturn26search7turn25view0 |
+| 7 | `MODELS` | 3D model binaries | OSRS’s runtime geometry for NPCs/objects/items/etc. citeturn14view0turn30search7 |
+| 22 | `ANIMAYAS` | “Animaya” animation data | Present in cache enumeration; details partly undocumented in community docs. citeturn14view0turn30search14 |
+
+Caution: older community writeups sometimes claim OSRS has only indices `0..16` plus `255`. OSRSBox’s cache documentation says (at least at the time of its writing) “17 index files” `idx0..idx16` plus `idx255`. Modern tooling (RuneLite) enumerates additional indices such as 22 and 24, so index count and meanings should be treated as version-dependent. citeturn45search11turn14view0
+
+### Cache completeness and why “my cache doesn’t work” happens
+
+OSRS assets are streamed progressively; OSRS Cache Reader’s README explicitly warns that “RuneScape streams in the cache so using the files from the client will not always work” unless you have a complete cache snapshot. citeturn31search5 OpenRS2 exists partly to provide consistent cache snapshots and supporting keys across builds. citeturn33search11
+
+### Component diagram: cache-to-asset relationships
+
+```mermaid
+classDiagram
+direction LR
+
+class Dat2Store {
+  main_file_cache.dat2
+}
+class IndexFile {
+  main_file_cache.idxN
+}
+class RootIndex {
+  main_file_cache.idx255
+}
+
+class Js5Index {
+  +id:int
+  +groups/archives
+}
+class ArchiveGroup {
+  +id:int
+  +files[]
+}
+class CacheFile {
+  +id:int
+  +bytes[]
+}
+
+class Model {
+  +vertexCount
+  +faceCount
+  +verticesX/Y/Z[]
+  +faceIndices1/2/3[]
+  +faceColors[]
+  +faceTextures?[]
+  +vertexGroups?[][]
+}
+class Framemap {
+  +types[]
+  +frameMaps[][]
+  +animayaSkeleton? 
+}
+class Frame {
+  +framemapId
+  +transformIndices[]
+  +dx/dy/dz[]
+}
+class Sequence {
+  +frameIDs[]
+  +frameLengths[]
+  +frameSounds?[]
+  +animMayaID? 
+}
+
+RootIndex --> IndexFile : references
+IndexFile --> Dat2Store : locates sectors
+IndexFile --> Js5Index : loads
+Js5Index --> ArchiveGroup : contains
+ArchiveGroup --> CacheFile : contains
+
+CacheFile --> Model : decode (idx 7)
+CacheFile --> Framemap : decode (idx 1)
+CacheFile --> Frame : decode (idx 0)
+CacheFile --> Sequence : decode (idx 2/config SEQUENCE)
+
+Frame --> Framemap : uses
+Sequence --> Frame : references via frameIDs
+Model --> Frame : animated by applying transforms to vertexGroups
+```
+
+## Model files and structure
+
+### OSRS “model format” in practice
+
+OSRS models are stored as proprietary binary blobs in the cache (commonly the `MODELS` index). Tools that decode OSRS models typically produce a runtime structure containing:
+
+- Vertex positions (arrays `vertexPositionsX`, `vertexPositionsY`, `vertexPositionsZ`)
+- Triangle/face indices (`faceVertexIndices1/2/3`)
+- Per-face color data (`faceColors`)
+- Optional per-face texture IDs (`faceTextures`)
+- Optional transparency/alpha (`faceAlphas`)
+- Optional per-face render types and priorities
+- Data used for animation grouping (`vertexSkins` → `vertexGroups`) citeturn25view0turn27search1
+
+RuneLite’s API exposes a similar “mesh-like” abstraction, where a `Mesh` provides vertex arrays and face index arrays, and includes `getFaceTextures()` and `getFaceTransparencies()` for rendering. citeturn27search1turn27search0
+
+### Multiple model encodings (“format versions”)
+
+A key point often missed in casual discussions: there isn’t just one byte layout. One community decoder detects multiple model formats by checking the last bytes of the model file and dispatching to loaders such as `load3`, `load2`, `load1`, or `loadOriginal`. citeturn19view1turn30search7 This matters for “rigor”: any model format writeup must either:
+
+- pin itself to a specific OSRS revision/build, or
+- implement the version-detection logic.
+
+### Vertex storage: delta encoding and “smart” integers
+
+Model decoders often reconstruct vertex positions by reading deltas (changes) from previous vertices rather than absolute coordinates, typically using a “smart” integer encoding (a Jagex pattern to compress small values efficiently). In one decoder, vertex deltas are read selectively based on per-vertex flags and accumulated into `x`, `y`, `z` running totals. citeturn19view5turn19view2
+
+### Triangles/faces, colors, textures, and UVs
+
+OSRS uses triangles for rendering. Face indices refer into the vertex arrays (exactly as a conventional indexed triangle mesh does). RuneLite’s `Mesh` interface exposes the A/B/C vertex index arrays (`getFaceIndices1/2/3`) and direct access to vertex coordinate arrays. citeturn27search1turn27search0
+
+Texturing is not “material-based” in the PBR sense; instead, models commonly use a mix of:
+
+- **Per-face palette/HSL colors** for untextured faces (exposed as `faceColors` in decoders, and RuneLite’s `ModelData.recolor()` explicitly references “Jagex’s HSL format”). citeturn27search2turn19view4
+- **Optional texture IDs** per face (`faceTextures`) with separate “texture triangle” data and texture coordinate generation. Some decoders compute UV coordinates programmatically from texture triangle definitions and per-face texture coordinate selectors. citeturn19view7turn19view8
+
+### Normals and lighting data
+
+Some tooling computes normals after decoding (`computeNormals2()`), indicating that models may not store full vertex normals explicitly (or that recomputation is preferred/required for lighting). citeturn19view1turn19view7
+
+### Skeletons/bones vs. OSRS “vertex groups”
+
+OSRS’s legacy animation system is best described as **rigid vertex grouping**, not modern weighted skinning:
+
+- A model may contain `vertexSkins` during decode, which is then converted into `vertexGroups` (a `groupId -> [vertexIndices...]` mapping) by `computeAnimationTables()`. citeturn19view7turn19view8
+- Animation frames reference groups (via framemap `frameMaps`) and apply transforms to every vertex in the referenced groups. citeturn25view0turn24view0
+
+This “one vertex belongs to one group” style is the reason many OSRS animation applications operate by directly mutating vertex positions rather than blending weighted bone matrices.
+
+## Animation data formats and system
+
+### The three core runtime pieces
+
+A practical, tool-backed breakdown:
+
+- **Sequence definition** (animation “timeline”): lists frame IDs (`frameIDs`) and frame durations (`frameLengths`), and can include per-frame sound/event data (`frameSounds`) and related parameters. citeturn26search7turn25view0  
+- **Frame definition**: contains a framemap ID and a sparse list of transforms; each transform entry includes a target index and X/Y/Z deltas/values. citeturn24view0turn25view0  
+- **Framemap definition** (skeleton map): provides `types` (transform types) and `frameMaps` (the group labels affected by each skeleton entry), and may optionally include an “animaya skeleton” for newer animation data. citeturn28search2turn30search5
+
+### Frame decoding: transform sparsity and defaults
+
+In a representative frame loader, a frame begins by reading the framemap ID, then iterates possible transform slots and reads a bitflag indicating which of X/Y/Z are present for that slot. Missing components default to 0, except for transform type `3` where missing components default to 128 (suggesting a fixed-point “1.0 scale” default). citeturn24view0turn25view0
+
+This is a strong clue for interpreting transform types:
+
+- type `1` behaves as translation (default 0)
+- type `2` behaves as rotation (default 0)
+- type `3` behaves as scaling (default 128, i.e., 1.0 in 1/128 fixed-point)
+
+That interpretation is consistent with the behavior of the animation application routine described below. citeturn25view0turn24view0
+
+### Sequence → (archive, frame) addressing
+
+A key OSRS idiom: a **frame ID** is typically a 32-bit value where:
+
+- high 16 bits identify the animation archive/group
+- low 16 bits identify the frame file within that archive
+
+One loader demonstrates this by computing `shiftedId = frameIDs[0] >> 16` to load the archive, then selecting frames by matching `(frameId & 65535)` against per-file IDs. citeturn25view0
+
+Example snippet (pseudo-code derived from the above pattern; this is not verbatim client code):
+
+```text
+archiveId = frameId >> 16
+fileId    = frameId & 0xFFFF
+frameDef  = loadAllFrames(index=FRAMES, archiveId).find(def.id == fileId)
+```
+
+### Applying a frame to a model: pivot + TRS on vertex groups
+
+A concrete, readable implementation exists in OSRS Cache Reader’s `loadFrame()` and `animate()` functions. The algorithm is:
+
+1. Copy the model’s vertex arrays (`verticesX/Y/Z`).
+2. For each transform entry in the frame:
+   - Lookup `framemap.types[typeIndex]` (the transform type).
+   - Lookup `framemap.frameMaps[typeIndex]` (the list of vertex-group IDs).
+   - Apply the transform to all vertices in those groups via `animate()`. citeturn25view0
+
+Transform behaviors visible in code:
+
+- **Type 0**: recomputes an “origin/pivot” (`animOffsets`) by averaging the positions of vertices in the referenced groups, then offsetting by dx/dy/dz. This sets the effective rotation/scaling origin for subsequent transforms. citeturn25view0
+- **Type 1 (translation)**: adds dx/dy/dz to each vertex in each referenced group. citeturn25view0
+- **Type 2 (rotation)**: subtracts the pivot, rotates around axes using sine/cosine, and then adds the pivot back. Rotation angles are derived from `(dx & 255) * 8` etc., implying a compact angle encoding. citeturn25view0
+- **Type 3 (scaling)**: subtracts pivot, multiplies by dx/dy/dz with `/ 128` normalization, then adds pivot back. citeturn25view0
+
+#### Minimal pseudo-code for frame application
+
+```pseudo
+function applyFrame(model, frame, framemap):
+  Vx,Vy,Vz = copy(model.vertices)
+  pivot = (0,0,0)
+
+  for each k in [0..frame.transformCount):
+    idx = frame.transformIndices[k]
+    t   = framemap.types[idx]         // 0 pivot-set, 1 translate, 2 rotate, 3 scale
+    groups = framemap.frameMaps[idx]  // list of vertex-group IDs
+    dx,dy,dz = frame.dx[k], frame.dy[k], frame.dz[k]
+
+    if t == 0:
+      pivot = averagePosition(Vx,Vy,Vz over vertices in model.vertexGroups[groups]) + (dx,dy,dz)
+    else if t == 1:
+      translate all vertices in vertexGroups[groups] by (dx,dy,dz)
+    else if t == 2:
+      rotate vertices around pivot using encoded angles (dx,dy,dz)
+    else if t == 3:
+      scale vertices around pivot by (dx/128, dy/128, dz/128)
+
+  return Vx,Vy,Vz
+```
+
+This describes exactly the vertex-space “skeletal” animation approach OSRS uses in its legacy system: the “skeleton” is effectively a mapping between transform slots and vertex groups, not a full hierarchical bone matrix evaluation (at least for this path). citeturn25view0turn19view8
+
+### Event hooks: per-frame sounds and related metadata
+
+Sequence definitions expose per-frame sound-related metadata (`frameSounds`) and (in some tooling) “Maya frame sounds” fields, indicating that animations can trigger sound effects or events synchronized to animation frames. citeturn26search7turn25view0
+
+### “Animaya” / “Maya” animations
+
+Modern OSRS assets include an `ANIMAYAS` index (ID 22) in RuneLite’s cache tooling. citeturn14view0 Sequence definitions and animation loaders include logic for a separate “Maya” path: if an `animMayaID` is present, the loader switches to loading frames with `isAnimaya: true` and uses a different path to build animation vertex data. citeturn25view0turn31search4
+
+Important rigor note: community docs for `AnimayaDefinition` contain explicit “unknown field” style placeholders (e.g., “Something to do with bones”), so any writeup of Animaya should clearly state what is known vs. speculative. citeturn30search14turn28search2
+
+## Runtime playback and rendering considerations
+
+### Timing: client cycle vs. game tick
+
+OSRS animation playback timing is easier to reason about when you separate:
+
+- **Client tick (client cycle):** occurs about every 20ms, i.e., up to 50 times per second, according to RuneLite’s `ClientTick` event documentation. citeturn6search1  
+- **Game tick:** occurs every 0.6 seconds, according to RuneLite’s `GameTick` event documentation. citeturn6search2  
+
+Sequence `frameLengths` are typically consumed in “client cycles” (this is a common inference in the OSRS tooling ecosystem, and is consistent with the presence of per-frame durations and a 20ms client cycle). What can be stated concretely is that sequences store `frameLengths`, and the render loop steps frames independently of the 0.6s game tick. citeturn26search7turn6search1turn6search2
+
+### Frame stepping and lack of inherent interpolation
+
+In the legacy vertex-transform approach shown above, each render-update applies a discrete frame transform to vertices. There is no intrinsic fractional interpolation step in the demonstrated algorithm; the vertex coordinates are updated using integer math and fixed-point-like scaling (division by 128 for type 3). citeturn25view0
+
+If you see smooth animation at >50 FPS in some clients, that smoothness is typically due to client-side enhancements (e.g., interpolation layers in a renderer/plugin). I did not find a primary-source, Jagex-published statement specifying interpolation behavior for OSRS’s legacy animation system; the safest, evidence-backed statement is that the demonstrated frame application is discrete per applied frame. citeturn25view0turn6search1
+
+### Performance characteristics: CPU vertex transforms and memory sharing
+
+Applying animations in vertex space has clear costs:
+
+- Per-frame application commonly starts by copying the model’s vertex arrays, then iterating over affected vertex indices and mutating positions. citeturn25view0  
+- RuneLite’s `ModelData` documentation warns that produced `Model` instances may share vertices/face indices/textures with the underlying `ModelData`, and advises cloning if mutation is needed. This is a direct hint that mutation vs. sharing is a performance-sensitive design point. citeturn27search2  
+
+Practically, OSRS clients mitigate this via caching (model caches, decoded frame caches, etc.), but the exact cache eviction strategies vary across client implementations and are not fully specified in the public Jagex documentation.
+
+### Rendering path, draw distance, and modern GPU implementations
+
+The original OSRS visual style is tied to its legacy engine constraints, but modern clients can render with GPU assistance. RuneLite explicitly advertises a “GPU” feature that “renders game using your GPU,” improving FPS and draw distance. citeturn36search6 That does not change the underlying asset formats—it changes how meshes are rasterized and sometimes how they are transformed/culled.
+
+### LOD commentary
+
+I did not find a primary-source description of multi-LOD meshes inside OSRS’s model indices (e.g., multiple meshes per entity keyed by distance). Most OSRS model usage in community tooling assumes one model ID corresponds to one mesh resolution, with performance handled via culling, scene tile limits, and renderer optimizations rather than per-asset LOD swaps. This should be treated as “no strong evidence found” rather than a definitive claim.
+
+## Tooling and pipelines: creation, export, and import
+
+### What is “official” vs. “community”
+
+Jagex does not publish an official OSRS model/animation authoring toolchain for community use. What we can observe reliably is:
+
+- OSRS runtime uses the cache + binary formats described above.
+- Community tooling reconstructs these formats by analyzing/deobfuscating clients and decoding caches.
+
+The presence of “Maya/Animaya” naming suggests (but does not prove) that Jagex’s internal content pipeline uses Autodesk Maya or Maya-exported data for some animations. Evidence of the “Maya” path exists in loaders and cache indices, but the upstream DCC tooling is not publicly described by Jagex. citeturn14view0turn25view0turn30search14
+
+### Common community tools and what they do
+
+| Tool / project | Primary use | OSRS / RS3 | Typical outputs / affordances | Evidence |
+|---|---|---|---|---|
+| OSRS Cache Reader (`osrscachereader`) | Read OSRS cache files (browser/Node), decode models/defs; includes glTF export + animation-to-vertex helpers | OSRS | glTF export mentioned; provides simple animation loading returning vertices | citeturn28search0turn31search5turn28search1 |
+| RuneLite cache tooling | Index enumeration; reading cache indices/archives; used by many downstream tools | OSRS | Index IDs, cache parsing, model/animation access patterns | citeturn14view0turn27search15 |
+| OpenRS2 Archive | Historical cache and keys archive; converts to `.dat2/.idx` on demand | OSRS + RS (JS5-era) | Downloadable cache snapshots; helps ensure complete cache | citeturn33search11 |
+| `rs-cache-library` (Kotlin) | General RuneScape cache read/write library | OSRS + RS3 (varies) | CRUD for indices/archives/files; XTEA; BZIP2/GZIP/LZMA compression | citeturn46view1 |
+| `librsfs` (C++) | RuneScape filesystem (`dat2/idx`) reader | OSRS + RS3 (notes RS3 can require LZMA) | Supports gzip/bzip2; optional LZMA for “very recent” RS3 | citeturn46view0 |
+| Creator’s Kit (RuneLite plugin) | In-game model spawning/merging/animating for scene creation; exports for creator workflows | OSRS (via RuneLite) | Spawn/merge models, animate/program scenes | citeturn32search2turn32search4 |
+| Model Dumper (RuneLite plugin) | Export models/animations from OSRS/RuneLite context | OSRS | Exports “sequence” (animation) and stores output under `.runelite/models` | citeturn32search1 |
+| RuneApps RS3 Model Viewer (web) | View RS3 cache models; supports OpenRS2 cache IDs | RS3 | Load local cache; load “historical caches” by OpenRS2 ID | citeturn33search6turn33search7 |
+| `rs3-modelviewer` (weirdgloop) | Download/decode RS3 cache and view models | RS3 | Cache downloader/decoder/model viewer in TS | citeturn33search2 |
+
+### Flowchart: modeling to runtime pipeline
+
+```mermaid
+flowchart TD
+  A[DCC authoring\n(Maya/Blender/etc.)] --> B[Jagex internal export\n(proprietary model + anim encodings)]
+  B --> C[Build pipeline packs assets\ninto JS5 groups/indices]
+  C --> D[Distribution\n(update servers / launcher)]
+  D --> E[Client receives/updates cache\n(dat2 + idx*)]
+  E --> F[Runtime decode\nModel + Framemap + Frames + Sequence]
+  F --> G[Post-processing\n(normals, UV generation,\nvertexGroups tables)]
+  G --> H[Animation playback\nselect sequence frame by time\napply TRS to vertex groups]
+  H --> I[Rendering\nlegacy rasterizer or GPU-based renderer]
+  I --> J[On-screen scene\nwith animated entities]
+```
+
+This pipeline is “rigorous” in the sense that every stage from E→H is directly evidenced by public decoders and API contracts, while A→C is necessarily inferential because Jagex’s authoring tools are not public. citeturn46view0turn25view0turn19view8turn27search2turn33search11
+
+## OSRS compared with RuneScape 3 and NXT
+
+### Client technology and rendering goals
+
+RuneScape 3’s “NXT” client is widely described as a newer downloadable client that replaced the older Java-based client for RS3 and is written in C++. citeturn33search5 Jagex’s own NXT launch messaging emphasizes improved performance and modern rendering features such as greater viewing distance, dynamic shadows, and lighting. citeturn33search0
+
+OSRS, by contrast, remains tied to its legacy-era asset formats and animation approach (frames/framemaps/sequences applied to vertex groups), even though modern clients can improve rendering via GPU paths. citeturn25view0turn36search6
+
+### Cache and compression evolution
+
+Both OSRS and RS3 (for the relevant eras) use JS5-managed caches, which is why OpenRS2 can archive “all builds of Old School RuneScape” and mainline RuneScape builds that use JS5 or its precursor. citeturn33search11
+
+Compression expectations also differ across eras/branches. For example:
+
+- A general cache library (`rs-cache-library`) advertises support for BZIP2, GZIP, and LZMA compression/decompression. citeturn46view1  
+- `librsfs` notes gzip and bzip2 bundled, and says optional LZMA is “only required on very recent versions of the RuneScape 3 file store.” citeturn46view0  
+
+This supports a cautious conclusion: OSRS content is typically reachable with gzip/bzip2-era tooling, while RS3 tooling often needs to handle additional compression modes depending on version.
+
+### Model/animation complexity
+
+RS3 model viewing tooling (RuneApps, weirdgloop’s rs3-modelviewer) exists as a separate ecosystem and tends to assume richer modern rendering/asset metadata. citeturn33search6turn33search2 OSRS has begun including “Animaya” data (index 22) and “Maya animation” pathways in some decoders, but public documentation for these fields remains partial. citeturn14view0turn30search14turn25view0
+
+## Community extraction, modding, and legal/ethical considerations
+
+### Common extraction methods in practice
+
+The typical “modding” workflow in OSRS communities is not to modify the live game, but to **extract and analyze**:
+
+- Obtain a complete cache (OpenRS2 snapshot, or a sufficiently complete local cache directory). citeturn33search11turn31search5  
+- Decode models/animations via libraries (RuneLite cache module, OSRS Cache Reader, rs-cache-library). citeturn28search1turn46view1turn27search15  
+- Export to interchange formats (glTF/OBJ) for offline viewing/rigging/animation. OSRS Cache Reader and RuneLite plugins support this style of export. citeturn28search0turn32search1turn32search2  
+
+### Legal boundaries from Jagex terms and rules
+
+Key points from Jagex’s legal portal (paraphrased, not legal advice):
+
+- Jagex’s Terms state that materials placed on Jagex products are protected by copyright and that you may not use them except under the Terms and for personal/non-commercial use; they also warn against creating or providing other means by which a Jagex product may be played (including replacement/modified client/server software or server emulators). citeturn35view3  
+- Jagex’s “Macro and client features not permitted” rules state that a macro/client feature is non-permissible if it is not in the approved client list and does things such as attempting to communicate directly with game worlds, generating input (automated mouse/keys), or modifying/replacing game applets. citeturn43search0  
+
+### Practical ethical norms in the OSRS asset research community
+
+Even when extraction is technically feasible, responsible practice generally looks like:
+
+- Do not redistribute full extracted asset packs (models, textures, animations) as standalone content—these remain Jagex IP. This aligns with Jagex’s stated IP ownership and “personal/non-commercial use” language. citeturn35view3  
+- Prefer linking to tooling and instructions rather than sharing copyrighted assets.
+- Avoid publishing unreleased content pulled from cache updates (the cache may contain work-in-progress assets; community wikis note that “unknown models” can appear and are sometimes used for speculation). citeturn34search18turn34search14  
+
+### “Approved plugin” ecosystems
+
+RuneLite’s Plugin Hub describes itself as a repository of community plugins “verified by RuneLite Developers” to comply with Jagex’s third-party client rules and to be non-malicious. citeturn32search3turn28search5 While this is not a blanket permission for all asset extraction, it is relevant when your “hands-on” work is performed via RuneLite plugin mechanisms.
+
+## Hands-on next steps for exploration
+
+### Build a reproducible “decode one model + one animation” workflow
+
+If you want to study OSRS animation rigorously, focus on a minimal unit: **(ModelID, SequenceID)**.
+
+1) **Get a complete cache snapshot**
+- If using a local cache directory, be aware it may be incomplete due to streaming. citeturn31search5turn34search14  
+- Prefer a known snapshot source (OpenRS2) when your goal is reproducibility across machines. citeturn33search11  
+
+2) **Decode with OSRS Cache Reader (Node)**
+OSRS Cache Reader’s README shows a minimal setup pattern: install the package, then create an `RSCache` pointing at a directory containing a `cache/` folder with `main_file_cache.dat2` and `main_file_cache.idx255`, etc. citeturn31search5turn28search0
+
+```bash
+npm install osrscachereader
+```
+
+```js
+// Conceptual sketch (consult project docs for exact API)
+import { RSCache } from "osrscachereader";
+const cache = new RSCache("./"); // expects ./cache/main_file_cache.dat2 etc.
+```
+
+3) **Follow the real asset linkages**
+- Load a **SequenceDefinition** (animation) from `CONFIGS`/`SEQUENCE`. citeturn25view0turn26search7  
+- Extract its `frameIDs` and `frameLengths`. citeturn26search7  
+- Resolve frames via `(frameId >> 16)` and `(frameId & 0xFFFF)` and apply them to the model using the framemap-linked transform types. citeturn25view0turn24view0  
+
+### Use RuneLite-based export tooling for fast iteration
+
+If your aim is to bring assets into Blender (for study, not redistribution):
+
+- **Creator’s Kit**: provides in-game spawning/merging/animating tools oriented toward creators. citeturn32search2turn32search4  
+- **Model Dumper**: provides explicit “Export Sequence” behavior and writes outputs under `.runelite/models`. citeturn32search1  
+- Community guides exist for installing Creator’s Kit and exporting/rigging OSRS models (useful as workflow references, but treat them as secondary sources). citeturn32search0  
+
+### Reference index IDs from a maintained source
+
+When writing your own extractor, use a maintained enumeration (RuneLite’s `IndexType`) rather than older static index tables, because index counts and meanings evolve over time. citeturn14view0turn45search11  
+
+### A compact checklist for “unknown/unspecified detail” handling
+
+When you hit a format ambiguity (common with Animaya/Maya data):
+
+- State what you know: index ID exists, loader branches exist, and which fields are explicitly documented as unknown. citeturn14view0turn30search14turn25view0  
+- Show how you’d infer structure: dump raw bytes, search for repeated patterns (counts/offsets), and correlate with runtime behavior (e.g., vertex deltas vs. direct transforms), without assuming a full Maya bone hierarchy unless you can validate it. citeturn25view0turn24view0turn19view2

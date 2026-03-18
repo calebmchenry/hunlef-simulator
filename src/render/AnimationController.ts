@@ -134,6 +134,8 @@ export class AnimationController {
   }
 
   private crossFadeTo(state: AnimState): void {
+    if (state === this.currentState) return;
+
     const nextAction = this.actions.get(state);
     if (!nextAction) return;
 
@@ -144,7 +146,10 @@ export class AnimationController {
     nextAction.play();
 
     if (prevAction && prevAction !== nextAction) {
-      nextAction.crossFadeFrom(prevAction, 0.1, false);
+      // With one-hot morph target animations, crossfading blends two
+      // incompatible vertex configurations additively, causing an "explosion"
+      // effect. Stop the previous action immediately instead.
+      prevAction.stop();
     }
   }
 

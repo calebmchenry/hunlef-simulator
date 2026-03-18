@@ -27,8 +27,9 @@ const HALF_GRID = GRID_SIZE / 2; // 6
 // Boss model scaling: OSRS model spans ~675 units in X, boss occupies 5 tiles (= 5 units in 3D).
 const BOSS_MODEL_SCALE = 5 / 675;
 const PLAYER_MODEL_SCALE = 1 / 200;
-const BOSS_MODEL_YAW_OFFSET = Math.PI; // OSRS model faces -Z, Three.js expects +Z
-const PLAYER_MODEL_YAW_OFFSET = Math.PI; // Player exports also face -Z
+const TORNADO_MODEL_SCALE = 1 / 674; // tornado model is 674 OSRS units wide, target ~1 tile
+const BOSS_MODEL_YAW_OFFSET = 0; // atan2(dx,dz) already faces +Z toward player
+const PLAYER_MODEL_YAW_OFFSET = 0; // same correction for player model
 const PLAYER_OVERHEAD_Y = 1.1;
 
 function lerp(a: number, b: number, t: number): number {
@@ -56,6 +57,218 @@ function entityCenterToWorld(tileX: number, tileY: number, size: number): THREE.
 interface PlayerGLTFAsset {
   scene: THREE.Object3D;
   animations: THREE.AnimationClip[];
+}
+
+interface MorphTrackBinding {
+  target: string;
+  suffix: string;
+  morphIndex: number | null;
+}
+
+interface MorphRetargetCandidate {
+  group: THREE.Group;
+  children: THREE.Mesh[];
+}
+
+const MORPH_RETARGET_MARKER = '__cgMorphRetargeted';
+
+function parseMorphTrackBinding(trackName: string): MorphTrackBinding | null {
+  const indexedMatch = trackName.match(/^(.+)(\.morphTargetInfluences\[(\d+)\])$/);
+  if (indexedMatch) {
+    return {
+      target: indexedMatch[1],
+      suffix: indexedMatch[2],
+      morphIndex: Number(indexedMatch[3]),
+    };
+  }
+
+  const fullMatch = trackName.match(/^(.+)(\.morphTargetInfluences)$/);
+  if (fullMatch) {
+    return {
+      target: fullMatch[1],
+      suffix: fullMatch[2],
+      morphIndex: null,
+    };
+  }
+
+  return null;
+}
+
+function reserveUniqueName(existingNames: Set<string>, base: string): string {
+  if (!existingNames.has(base)) {
+    existingNames.add(base);
+    return base;
+  }
+
+  let suffix = 1;
+  let candidate = `${base}_${suffix}`;
+  while (existingNames.has(candidate)) {
+    suffix++;
+    candidate = `${base}_${suffix}`;
+  }
+  existingNames.add(candidate);
+  return candidate;
+}
+
+function collectMorphRetargetCandidates(root: THREE.Object3D): MorphRetargetCandidate[] {
+  const existingNames = new Set<string>();
+  root.traverse((object) => {
+    if (object.name) {
+      existingNames.add(object.name);
+    }
+  });
+
+  const candidates: MorphRetargetCandidate[] = [];
+  root.traverse((object) => {
+    if (!(object instanceof THREE.Group)) return;
+
+    const morphChildren = object.children.filter((child): child is THREE.Mesh => {
+      const mesh = child as THREE.Mesh;
+      return mesh.isMesh === true && Array.isArray(mesh.morphTargetInfluences);
+    });
+    if (morphChildren.length === 0) return;
+
+    for (let i = 0; i < morphChildren.length; i++) {
+      const child = morphChildren[i];
+      if (!child.name) {
+        child.name = reserveUniqueName(existingNames, `Mesh_${i}`);
+      }
+    }
+
+    candidates.push({ group: object, children: morphChildren });
+  });
+
+  return candidates;
+}
+
+function retargetMorphAnimations(root: THREE.Object3D, clips: THREE.AnimationClip[]): void {
+  if (clips.length === 0) {
+    console.log('[Renderer3D] retargetMorphAnimations: no animation clips to retarget');
+    return;
+  }
+
+  const candidates = collectMorphRetargetCandidates(root);
+  if (candidates.length === 0) {
+    console.log('[Renderer3D] retargetMorphAnimations: no multi-primitive morph target groups found');
+    return;
+  }
+
+  const candidateLookup = new Map<string, MorphRetargetCandidate>();
+  const childTargetKeys = new Set<string>();
+  const candidateSummary = candidates.map((candidate) => {
+    const groupLabel = candidate.group.name || candidate.group.uuid;
+    const childSummary = candidate.children.map((child) => {
+      const childLabel = child.name || child.uuid;
+      const morphCount = child.morphTargetInfluences?.length ?? 0;
+      childTargetKeys.add(childLabel);
+      childTargetKeys.add(child.uuid);
+      return `${childLabel}(${morphCount})`;
+    });
+
+    if (candidate.group.name) {
+      candidateLookup.set(candidate.group.name, candidate);
+    }
+    candidateLookup.set(candidate.group.uuid, candidate);
+
+    return `${groupLabel} -> [${childSummary.join(', ')}]`;
+  });
+
+  console.log(`[Renderer3D] retargetMorphAnimations: found ${candidates.length} candidate group(s)`);
+  for (const summary of candidateSummary) {
+    console.log(`[Renderer3D] retargetMorphAnimations: candidate ${summary}`);
+  }
+
+  for (const clip of clips) {
+    const clipUserData = clip.userData as Record<string, unknown>;
+    if (clipUserData[MORPH_RETARGET_MARKER] === true) {
+      console.log(`[Renderer3D] retargetMorphAnimations: clip "${clip.name}" already retargeted`);
+      continue;
+    }
+
+    const hasMorphTracks = clip.tracks.some((track) => parseMorphTrackBinding(track.name) !== null);
+    if (!hasMorphTracks) continue;
+
+    const hasGroupTargets = clip.tracks.some((track) => {
+      const binding = parseMorphTrackBinding(track.name);
+      return binding !== null && candidateLookup.has(binding.target);
+    });
+
+    const hasChildTargets = clip.tracks.some((track) => {
+      const binding = parseMorphTrackBinding(track.name);
+      return binding !== null && childTargetKeys.has(binding.target);
+    });
+
+    if (!hasGroupTargets && hasChildTargets) {
+      clipUserData[MORPH_RETARGET_MARKER] = true;
+      console.log(`[Renderer3D] retargetMorphAnimations: clip "${clip.name}" already targets child meshes`);
+      continue;
+    }
+
+    if (!hasGroupTargets) {
+      console.log(`[Renderer3D] retargetMorphAnimations: clip "${clip.name}" has no group-targeted morph tracks`);
+      continue;
+    }
+
+    const nextTracks: THREE.KeyframeTrack[] = [];
+    let retargetedTracks = 0;
+    let generatedTracks = 0;
+
+    for (const track of clip.tracks) {
+      const binding = parseMorphTrackBinding(track.name);
+      if (!binding) {
+        nextTracks.push(track);
+        continue;
+      }
+
+      const candidate = candidateLookup.get(binding.target);
+      if (!candidate) {
+        nextTracks.push(track);
+        continue;
+      }
+
+      const requiredMorphCount = binding.morphIndex !== null
+        ? binding.morphIndex + 1
+        : track.getValueSize();
+      let generatedForTrack = 0;
+
+      for (const child of candidate.children) {
+        const childMorphCount = child.morphTargetInfluences?.length ?? 0;
+        const childLabel = child.name || child.uuid;
+
+        if (childMorphCount < requiredMorphCount) {
+          console.warn(
+            `[Renderer3D] retargetMorphAnimations: skipping child "${childLabel}" ` +
+            `for track "${track.name}" (needs ${requiredMorphCount} morph targets, has ${childMorphCount})`,
+          );
+          continue;
+        }
+
+        const clonedTrack = track.clone();
+        clonedTrack.name = `${child.name}${binding.suffix}`;
+        nextTracks.push(clonedTrack);
+        generatedForTrack++;
+        generatedTracks++;
+      }
+
+      if (generatedForTrack > 0) {
+        retargetedTracks++;
+      } else {
+        // If no valid child could accept the track, keep the original to avoid dropping data.
+        nextTracks.push(track);
+      }
+    }
+
+    if (retargetedTracks > 0) {
+      clip.tracks = nextTracks;
+      clip.resetDuration();
+      clipUserData[MORPH_RETARGET_MARKER] = true;
+    }
+
+    console.log(
+      `[Renderer3D] retargetMorphAnimations: clip "${clip.name}" retargeted ${retargetedTracks} ` +
+      `track(s), generated ${generatedTracks} child track(s)`,
+    );
+  }
 }
 
 export class Renderer3D {
@@ -410,7 +623,6 @@ export class Renderer3D {
       const nextMaterials = oldMaterials.map((material: THREE.Material) => {
         const oldMat = material as THREE.MeshStandardMaterial;
         const hasMap = !!oldMat.map;
-
         return new THREE.MeshBasicMaterial({
           vertexColors: hasColors,
           map: hasMap ? oldMat.map : null,
@@ -433,6 +645,7 @@ export class Renderer3D {
         // GLTF loaded successfully
         const model = gltf.scene;
         model.scale.set(BOSS_MODEL_SCALE, BOSS_MODEL_SCALE, BOSS_MODEL_SCALE);
+        retargetMorphAnimations(model, gltf.animations);
         this.applyUnlitMaterials(gltf.scene, true);
 
         this.bossGroup.add(model);
@@ -475,8 +688,21 @@ export class Renderer3D {
       '/models/tornado.gltf',
       (gltf) => {
         this.applyUnlitMaterials(gltf.scene);
+        // Harden texture filters for the tiny 40x4 tornado texture
+        gltf.scene.traverse((child) => {
+          const mesh = child as THREE.Mesh;
+          if (mesh.isMesh) {
+            const mat = mesh.material as THREE.MeshBasicMaterial;
+            if (mat.map) {
+              mat.map.magFilter = THREE.NearestFilter;
+              mat.map.minFilter = THREE.NearestFilter;
+              mat.map.generateMipmaps = false;
+              mat.map.needsUpdate = true;
+            }
+          }
+        });
         this.tornadoTemplate = gltf.scene;
-        this.tornadoTemplate.scale.set(0.7, 0.7, 0.7);
+        this.tornadoTemplate.scale.set(TORNADO_MODEL_SCALE, TORNADO_MODEL_SCALE, TORNADO_MODEL_SCALE);
         console.log('[Renderer3D] Tornado GLTF loaded');
       },
       undefined,
@@ -517,6 +743,10 @@ export class Renderer3D {
         loader.loadAsync('/models/player_staff.gltf'),
         loader.loadAsync('/models/player_halberd.gltf'),
       ]);
+
+      retargetMorphAnimations(bodyBow.scene, bodyBow.animations);
+      retargetMorphAnimations(bodyStaff.scene, bodyStaff.animations);
+      retargetMorphAnimations(bodyHalberd.scene, bodyHalberd.animations);
 
       this.applyUnlitMaterials(bodyBow.scene);
       this.applyUnlitMaterials(bodyStaff.scene);
@@ -656,6 +886,7 @@ export class Renderer3D {
     if (this.animController) {
       this.animController.update(dt);
       this.updateBossAnimations(sim);
+
     }
 
     // Update entities

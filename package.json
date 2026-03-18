@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "export-player": "node tools/cache-reader/export-player-gltf.mjs"
+    "export-player": "node tools/cache-reader/export-player-gltf.mjs",
+    "validate-gltf": "node tools/cache-reader/validate-gltf.mjs"
   },
   "devDependencies": {
     "@types/three": "^0.183.1",

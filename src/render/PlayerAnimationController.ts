@@ -19,7 +19,6 @@ const ANIM_NAME_MAP: Record<string, PlayerAnimState> = {
 };
 
 const EXPECTED_CLIP_ORDER: PlayerAnimState[] = ['idle', 'eat', 'attack'];
-const CROSS_FADE_SECONDS = 0.1;
 
 export class PlayerAnimationController {
   private readonly root: THREE.Object3D;
@@ -88,6 +87,8 @@ export class PlayerAnimationController {
   }
 
   private crossFadeTo(state: PlayerAnimState): void {
+    if (state === this.currentState) return;
+
     const nextAction = this.actions.get(state);
     if (!nextAction) return;
 
@@ -98,7 +99,7 @@ export class PlayerAnimationController {
     nextAction.play();
 
     if (prevAction && prevAction !== nextAction) {
-      nextAction.crossFadeFrom(prevAction, CROSS_FADE_SECONDS, false);
+      prevAction.stop();
     }
   }
 }
