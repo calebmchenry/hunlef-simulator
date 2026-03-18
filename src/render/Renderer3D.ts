@@ -124,7 +124,7 @@ export class Renderer3D {
     this.webglRenderer = new THREE.WebGLRenderer({ antialias: true });
     this.webglRenderer.setSize(GRID_SIZE * TILE_SIZE_PX, GRID_SIZE * TILE_SIZE_PX);
     this.webglRenderer.setPixelRatio(window.devicePixelRatio);
-    this.webglRenderer.setClearColor(0x1a0a0a);
+    this.webglRenderer.setClearColor(0x0d0507);
     this.canvas = this.webglRenderer.domElement;
     this.canvas.style.border = '2px solid #4a2020';
     this.canvas.style.cursor = 'pointer';
@@ -243,14 +243,14 @@ export class Renderer3D {
 
   private createFloor(): void {
     const floorGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE);
-    const floorMat = new THREE.MeshLambertMaterial({ color: 0x1a0a0a });
+    const floorMat = new THREE.MeshLambertMaterial({ color: 0x2d1216 });
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -0.01;
     this.scene.add(floor);
 
     // Grid lines
-    const gridMat = new THREE.LineBasicMaterial({ color: 0x3a1a1a });
+    const gridMat = new THREE.LineBasicMaterial({ color: 0x5c2a2e });
     const gridPoints: THREE.Vector3[] = [];
 
     for (let i = 0; i <= GRID_SIZE; i++) {
@@ -424,7 +424,7 @@ export class Renderer3D {
     this.updateBoss(sim, tickProgress);
     const playerWorld = this.updatePlayer(sim, tickProgress);
     if (sim.state === 'countdown') {
-      this.cameraController.setTarget(0, 0, 0);
+      this.cameraController.snapTarget(0, 0, 0);
     } else {
       this.cameraController.setTarget(playerWorld.x, 0, playerWorld.z);
     }

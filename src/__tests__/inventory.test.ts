@@ -31,25 +31,24 @@ describe('Inventory', () => {
     it('populates correct number of items', () => {
       const inv = new Inventory();
       inv.buildFromLoadout(createConfig());
-      // 1 weapon + 2 egniol vials (8 doses = 2 vials) + 12 paddlefish + 4 corrupted = 19
-      expect(inv.itemCount).toBe(19);
+      // 2 egniol vials (8 doses = 2 vials) + 12 paddlefish + 4 corrupted = 18
+      expect(inv.itemCount).toBe(18);
     });
 
-    it('places weapons first, then potions, then food', () => {
+    it('places potions first, then food when no secondary weapon is configured', () => {
       const inv = new Inventory();
       inv.buildFromLoadout(createConfig());
-      expect(inv.slots[0]!.category).toBe('weapon');
+      expect(inv.slots[0]!.category).toBe('potion');
       expect(inv.slots[1]!.category).toBe('potion');
-      expect(inv.slots[2]!.category).toBe('potion');
-      expect(inv.slots[3]!.category).toBe('food');
+      expect(inv.slots[2]!.category).toBe('food');
     });
 
     it('creates correct egniol vials from doses', () => {
       const inv = new Inventory();
       inv.buildFromLoadout(createConfig({ egniolDoses: 7 }));
       // 7 doses = 2 vials: first has 4 doses, second has 3
-      const vial1 = inv.slots[1];
-      const vial2 = inv.slots[2];
+      const vial1 = inv.slots[0];
+      const vial2 = inv.slots[1];
       expect(vial1!.quantity).toBe(4);
       expect(vial2!.quantity).toBe(3);
     });
@@ -61,9 +60,8 @@ describe('Inventory', () => {
         secondaryWeaponTier: 3,
       }));
       expect(inv.slots[0]!.category).toBe('weapon');
-      expect(inv.slots[1]!.category).toBe('weapon');
-      expect(inv.slots[0]!.name).toContain('Staff');
-      expect(inv.slots[1]!.name).toContain('Bow');
+      expect(inv.slots[1]!.category).toBe('potion');
+      expect(inv.slots[0]!.name).toContain('Bow');
     });
 
     it('respects 28-slot limit', () => {
@@ -116,7 +114,10 @@ describe('Inventory', () => {
 
     it('returns equip action for weapon', () => {
       const inv = new Inventory();
-      inv.buildFromLoadout(createConfig());
+      inv.buildFromLoadout(createConfig({
+        secondaryWeaponType: 'bow',
+        secondaryWeaponTier: 3,
+      }));
       const action = inv.useItem(0); // first slot is weapon
       expect(action).not.toBeNull();
       expect(action!.type).toBe('equip');

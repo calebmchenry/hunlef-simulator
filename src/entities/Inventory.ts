@@ -45,18 +45,7 @@ export class Inventory {
     this.slots = new Array(28).fill(null);
     let idx = 0;
 
-    // Weapons first - always include the primary weapon
-    const primaryWeapon = WEAPONS[config.weaponType][config.weaponTier];
-    this.slots[idx++] = {
-      id: `${config.weaponType}_${config.weaponTier}`,
-      name: primaryWeapon.name,
-      category: 'weapon',
-      quantity: 1,
-      color: '#8888cc',
-      spriteUrl: weaponSprite(config.weaponType, config.weaponTier),
-    };
-
-    // Second weapon if configured
+    // Secondary weapon goes in inventory; primary is already equipped via Loadout.weapon
     if (config.secondaryWeaponType && config.secondaryWeaponTier) {
       const secondaryWeapon = WEAPONS[config.secondaryWeaponType][config.secondaryWeaponTier];
       this.slots[idx++] = {

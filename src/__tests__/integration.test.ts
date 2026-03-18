@@ -191,8 +191,8 @@ describe('Hunlef protection integration', () => {
     sim.boss.protectionStyle = 'ranged';
     sim.boss.offPrayerHitCount = 0;
 
-    // Switch to staff (magic) via inventory slot 1
-    sim.useInventoryItem(1); // secondary weapon should be at index 1
+    // Switch to staff (magic) via inventory slot 0
+    sim.useInventoryItem(0); // secondary weapon should be at index 0
 
     // Run ticks — staff attacks should deal damage (boss protects ranged, not magic)
     for (let i = 0; i < 30; i++) {

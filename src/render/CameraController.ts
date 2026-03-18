@@ -58,6 +58,13 @@ export class CameraController {
     this.desiredTarget.set(x, y, z);
   }
 
+  /** Instantly move the camera focus to the given point (no lerp). */
+  snapTarget(x: number, y: number, z: number): void {
+    this.target.set(x, y, z);
+    this.desiredTarget.set(x, y, z);
+    this.updateCameraPosition();
+  }
+
   /** Call each frame with delta time in seconds */
   update(dt: number): void {
     if (this.keysDown.has('ArrowLeft')) {
