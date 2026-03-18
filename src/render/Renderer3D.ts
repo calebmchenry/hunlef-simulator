@@ -86,6 +86,10 @@ export class Renderer3D {
   private playerAssetsFailed: boolean = false;
   private playerModelDirty: boolean = true;
   private targetTileIndicator: THREE.Mesh;
+  private playerTrueTile: THREE.Group;
+  private bossTrueTile: THREE.Group;
+  private tornadoTrueTilePool: THREE.Group[] = [];
+  private activeTornadoTrueTiles: THREE.Group[] = [];
 
   // Overhead sprites
   private playerOverheadSprite: THREE.Sprite;
@@ -184,7 +188,7 @@ export class Renderer3D {
     this.scene.add(this.bossGroup);
 
     // Style indicator ring around boss feet
-    const ringGeo = new THREE.RingGeometry(2.2, 2.5, 32);
+    const ringGeo = new THREE.RingGeometry(1.8, 2.1, 32);
     const ringMat = new THREE.MeshBasicMaterial({
       color: 0xaa44cc,
       side: THREE.DoubleSide,
@@ -193,7 +197,8 @@ export class Renderer3D {
     });
     this.bossStyleIndicator = new THREE.Mesh(ringGeo, ringMat);
     this.bossStyleIndicator.rotation.x = -Math.PI / 2;
-    this.bossStyleIndicator.position.y = 0.03;
+    this.bossStyleIndicator.position.y = 0.035;
+    this.bossStyleIndicator.renderOrder = 4;
     this.scene.add(this.bossStyleIndicator);
 
     // Load boss model: try GLTF first, fall back to JSON
@@ -222,12 +227,24 @@ export class Renderer3D {
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.6,
+      depthWrite: false,
     });
     this.targetTileIndicator = new THREE.Mesh(targetGeo, targetMat);
     this.targetTileIndicator.rotation.x = -Math.PI / 2;
-    this.targetTileIndicator.position.y = 0.02;
+    this.targetTileIndicator.position.y = 0.025;
+    this.targetTileIndicator.renderOrder = 2;
     this.targetTileIndicator.visible = false;
     this.scene.add(this.targetTileIndicator);
+
+    // Player true tile - yellow 1x1 outline
+    this.playerTrueTile = this.createTileOutline(1, 1, 0xffff00);
+    this.playerTrueTile.visible = false;
+    this.scene.add(this.playerTrueTile);
+
+    // Boss true tile - blue 5x5 outline
+    this.bossTrueTile = this.createTileOutline(5, 5, 0x4488ff);
+    this.bossTrueTile.visible = false;
+    this.scene.add(this.bossTrueTile);
 
     // Overhead sprites
     this.playerOverheadSprite = this.createOverheadSprite();
@@ -293,6 +310,87 @@ export class Renderer3D {
     const gridLines = new THREE.LineSegments(gridGeo, gridMat);
     gridLines.position.y = 0.01;
     this.scene.add(gridLines);
+  }
+
+  private createTileOutline(
+    width: number,
+    height: number,
+    color: number,
+    lineWidth: number = 0.06,
+  ): THREE.Group {
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.8,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+
+    const group = new THREE.Group();
+    group.position.y = 0.03;
+    group.renderOrder = 3;
+
+    const horizontalGeo = new THREE.PlaneGeometry(width, lineWidth);
+    const verticalGeo = new THREE.PlaneGeometry(lineWidth, height);
+
+    const top = new THREE.Mesh(horizontalGeo, mat);
+    top.rotation.x = -Math.PI / 2;
+    top.position.set(0, 0, -height / 2 + lineWidth / 2);
+    top.renderOrder = 3;
+    group.add(top);
+
+    const bottom = new THREE.Mesh(horizontalGeo, mat);
+    bottom.rotation.x = -Math.PI / 2;
+    bottom.position.set(0, 0, height / 2 - lineWidth / 2);
+    bottom.renderOrder = 3;
+    group.add(bottom);
+
+    const left = new THREE.Mesh(verticalGeo, mat);
+    left.rotation.x = -Math.PI / 2;
+    left.position.set(-width / 2 + lineWidth / 2, 0, 0);
+    left.renderOrder = 3;
+    group.add(left);
+
+    const right = new THREE.Mesh(verticalGeo, mat);
+    right.rotation.x = -Math.PI / 2;
+    right.position.set(width / 2 - lineWidth / 2, 0, 0);
+    right.renderOrder = 3;
+    group.add(right);
+
+    return group;
+  }
+
+  private setTileOutlineOpacity(group: THREE.Group, opacity: number): void {
+    group.traverse((child) => {
+      if (!(child as THREE.Mesh).isMesh) return;
+      const mesh = child as THREE.Mesh;
+      const material = mesh.material as THREE.MeshBasicMaterial;
+      material.opacity = opacity;
+    });
+  }
+
+  private disposeTileOutline(group: THREE.Group): void {
+    const disposedGeometries = new Set<THREE.BufferGeometry>();
+    const disposedMaterials = new Set<THREE.Material>();
+
+    group.traverse((child) => {
+      if (!(child as THREE.Mesh).isMesh) return;
+      const mesh = child as THREE.Mesh;
+
+      const geometry = mesh.geometry as THREE.BufferGeometry;
+      if (!disposedGeometries.has(geometry)) {
+        geometry.dispose();
+        disposedGeometries.add(geometry);
+      }
+
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of materials) {
+        if (!disposedMaterials.has(material)) {
+          material.dispose();
+          disposedMaterials.add(material);
+        }
+      }
+    });
   }
 
   private applyUnlitMaterials(root: THREE.Object3D, logMorphTargets: boolean = false): void {
@@ -376,8 +474,9 @@ export class Renderer3D {
     loader.load(
       '/models/tornado.gltf',
       (gltf) => {
+        this.applyUnlitMaterials(gltf.scene);
         this.tornadoTemplate = gltf.scene;
-        this.tornadoTemplate.scale.set(0.4, 0.4, 0.4);
+        this.tornadoTemplate.scale.set(0.7, 0.7, 0.7);
         console.log('[Renderer3D] Tornado GLTF loaded');
       },
       undefined,
@@ -385,9 +484,9 @@ export class Renderer3D {
         // Fallback: use a cone as tornado placeholder
         console.warn('[Renderer3D] Tornado GLTF load failed, using cone placeholder');
         const geo = new THREE.ConeGeometry(0.3, 1.2, 8);
-        const mat = new THREE.MeshLambertMaterial({ color: 0x888888 });
+        const mat = new THREE.MeshBasicMaterial({ color: 0xccddff });
         const mesh = new THREE.Mesh(geo, mat);
-        mesh.scale.set(0.4, 0.4, 0.4);
+        mesh.scale.set(0.7, 0.7, 0.7);
         const group = new THREE.Group();
         group.add(mesh);
         this.tornadoTemplate = group;
@@ -575,6 +674,7 @@ export class Renderer3D {
     this.updateProjectiles(sim, tickProgress);
     this.updateHitSplats(sim);
     this.updateFloorTiles(sim);
+    this.updateTrueTiles(sim);
     this.updateTornadoes(sim, tickProgress, dt);
     this.updateOverlays(sim);
 
@@ -649,7 +749,7 @@ export class Renderer3D {
       this.bossGroup.rotation.y = Math.atan2(dx, dz) + BOSS_MODEL_YAW_OFFSET;
     }
 
-    this.bossStyleIndicator.position.set(worldPos.x, 0.03, worldPos.z);
+    this.bossStyleIndicator.position.set(worldPos.x, 0.035, worldPos.z);
     const color = boss.currentStyle === 'ranged' ? 0x44cc44 : 0xaa44cc;
     (this.bossStyleIndicator.material as THREE.MeshBasicMaterial).color.setHex(color);
   }
@@ -706,10 +806,77 @@ export class Renderer3D {
     const target = sim.player.targetTile;
     if (target) {
       const wp = tileToWorld(target.x, target.y);
-      this.targetTileIndicator.position.set(wp.x, 0.02, wp.z);
+      this.targetTileIndicator.position.set(wp.x, 0.025, wp.z);
       this.targetTileIndicator.visible = true;
     } else {
       this.targetTileIndicator.visible = false;
+    }
+  }
+
+  private updateTrueTiles(sim: GameSimulation): void {
+    const isActive = sim.state === 'running' || sim.state === 'won' || sim.state === 'lost';
+
+    if (isActive) {
+      const playerWorld = tileToWorld(sim.player.pos.x, sim.player.pos.y);
+      this.playerTrueTile.position.set(playerWorld.x, 0.03, playerWorld.z);
+      this.playerTrueTile.visible = true;
+    } else {
+      this.playerTrueTile.visible = false;
+    }
+
+    if (isActive && sim.state !== 'won') {
+      const bossWorld = entityCenterToWorld(sim.boss.pos.x, sim.boss.pos.y, sim.boss.size);
+      this.bossTrueTile.position.set(bossWorld.x, 0.03, bossWorld.z);
+      this.bossTrueTile.visible = true;
+    } else {
+      this.bossTrueTile.visible = false;
+    }
+
+    const occupiedTiles = new Map<string, { x: number; y: number; count: number }>();
+    if (isActive) {
+      for (const tornado of sim.tornadoes) {
+        const key = `${tornado.pos.x},${tornado.pos.y}`;
+        const existing = occupiedTiles.get(key);
+        if (existing) {
+          existing.count++;
+        } else {
+          occupiedTiles.set(key, {
+            x: tornado.pos.x,
+            y: tornado.pos.y,
+            count: 1,
+          });
+        }
+      }
+    }
+
+    const uniqueTiles = Array.from(occupiedTiles.values());
+
+    while (this.activeTornadoTrueTiles.length > uniqueTiles.length) {
+      const trueTile = this.activeTornadoTrueTiles.pop()!;
+      trueTile.visible = false;
+      this.scene.remove(trueTile);
+      this.tornadoTrueTilePool.push(trueTile);
+    }
+
+    for (let i = 0; i < uniqueTiles.length; i++) {
+      let trueTile: THREE.Group;
+      if (i < this.activeTornadoTrueTiles.length) {
+        trueTile = this.activeTornadoTrueTiles[i];
+      } else {
+        if (this.tornadoTrueTilePool.length > 0) {
+          trueTile = this.tornadoTrueTilePool.pop()!;
+        } else {
+          trueTile = this.createTileOutline(1, 1, 0xffffff);
+        }
+        this.scene.add(trueTile);
+        this.activeTornadoTrueTiles.push(trueTile);
+      }
+
+      const tile = uniqueTiles[i];
+      const tileWorld = tileToWorld(tile.x, tile.y);
+      trueTile.position.set(tileWorld.x, 0.03, tileWorld.z);
+      this.setTileOutlineOpacity(trueTile, 0.8 + 0.15 * Math.min(tile.count - 1, 1));
+      trueTile.visible = true;
     }
   }
 
@@ -928,6 +1095,7 @@ export class Renderer3D {
           );
           overlay.rotation.x = -Math.PI / 2;
           overlay.position.y = 0.02;
+          overlay.renderOrder = 1;
           this.tileOverlays.set(key, overlay);
           this.scene.add(overlay);
         }
@@ -989,7 +1157,7 @@ export class Renderer3D {
       );
 
       // Spin effect
-      mesh.rotation.y += dt * 3;
+      mesh.rotation.y += dt * 5;
       mesh.visible = true;
     }
   }
@@ -997,6 +1165,11 @@ export class Renderer3D {
   /** Clean up Three.js resources */
   dispose(): void {
     this.playerAnimController?.dispose();
+    this.disposeTileOutline(this.playerTrueTile);
+    this.disposeTileOutline(this.bossTrueTile);
+    for (const tile of [...this.activeTornadoTrueTiles, ...this.tornadoTrueTilePool]) {
+      this.disposeTileOutline(tile);
+    }
     this.playerFallbackMesh.geometry.dispose();
     (this.playerFallbackMesh.material as THREE.Material).dispose();
     this.webglRenderer.dispose();
