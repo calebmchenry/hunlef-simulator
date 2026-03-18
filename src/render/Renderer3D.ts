@@ -20,6 +20,8 @@ import bossModelData from '../../docs/assets/models/model_38595.json';
 
 const GRID_SIZE = 12;
 const TILE_SIZE_PX = 48; // projectile coordinates are still in pixel space
+const CANVAS_WIDTH = 1024;
+const CANVAS_HEIGHT = 576;
 
 // 3D world: 1 unit = 1 tile. Arena is 12x12, centered at origin.
 const HALF_GRID = GRID_SIZE / 2; // 6
@@ -28,6 +30,7 @@ const HALF_GRID = GRID_SIZE / 2; // 6
 const BOSS_MODEL_SCALE = 5 / 675;
 const PLAYER_MODEL_SCALE = 1 / 200;
 const TORNADO_MODEL_SCALE = 1 / 674; // tornado model is 674 OSRS units wide, target ~1 tile
+const BOSS_MORPH_INFLUENCE_SCALE = 0.5;
 const BOSS_MODEL_YAW_OFFSET = 0; // atan2(dx,dz) already faces +Z toward player
 const PLAYER_MODEL_YAW_OFFSET = 0; // same correction for player model
 const PLAYER_OVERHEAD_Y = 1.1;
@@ -361,7 +364,7 @@ export class Renderer3D {
   constructor(container: HTMLElement) {
     // Set up Three.js renderer
     this.webglRenderer = new THREE.WebGLRenderer({ antialias: true });
-    this.webglRenderer.setSize(GRID_SIZE * TILE_SIZE_PX, GRID_SIZE * TILE_SIZE_PX);
+    this.webglRenderer.setSize(CANVAS_WIDTH, CANVAS_HEIGHT);
     this.webglRenderer.setPixelRatio(window.devicePixelRatio);
     this.webglRenderer.setClearColor(0x0d0507);
     this.canvas = this.webglRenderer.domElement;
@@ -381,7 +384,7 @@ export class Renderer3D {
     this.scene = new THREE.Scene();
 
     // Camera
-    const aspect = 1; // square canvas
+    const aspect = CANVAS_WIDTH / CANVAS_HEIGHT;
     this.camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 1000);
     this.cameraController = new CameraController(this.camera, this.canvas);
 
@@ -850,7 +853,7 @@ export class Renderer3D {
    * Returns null when the click does not intersect the y=0 floor plane
    * or lands outside the 12x12 arena bounds.
    */
-  screenToTile(clientX: number, clientY: number): Position | null {
+  screenToTile(clientX: number, clientY: number): (Position & { clamped: boolean }) | null {
     const rect = this.canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) {
       return null;
@@ -870,11 +873,11 @@ export class Renderer3D {
     const tileX = Math.floor(hit.x + HALF_GRID);
     const tileY = Math.floor(hit.z + HALF_GRID);
 
-    if (tileX < 0 || tileX >= GRID_SIZE || tileY < 0 || tileY >= GRID_SIZE) {
-      return null;
-    }
+    const clampedX = Math.max(0, Math.min(GRID_SIZE - 1, tileX));
+    const clampedY = Math.max(0, Math.min(GRID_SIZE - 1, tileY));
+    const clamped = (tileX !== clampedX || tileY !== clampedY);
 
-    return { x: tileX, y: tileY };
+    return { x: clampedX, y: clampedY, clamped };
   }
 
   draw(sim: GameSimulation, tickProgress: number = 0): void {
@@ -887,6 +890,17 @@ export class Renderer3D {
       this.animController.update(dt);
       this.updateBossAnimations(sim);
 
+      // Scale down boss morph target influences to reduce "exploded" look during attacks
+      this.bossGroup.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          const mesh = child as THREE.Mesh;
+          if (mesh.morphTargetInfluences) {
+            for (let i = 0; i < mesh.morphTargetInfluences.length; i++) {
+              mesh.morphTargetInfluences[i] *= BOSS_MORPH_INFLUENCE_SCALE;
+            }
+          }
+        }
+      });
     }
 
     // Update entities
@@ -895,7 +909,8 @@ export class Renderer3D {
     this.updatePlayerAnimations(sim);
     this.playerAnimController?.update(dt);
     if (sim.state === 'countdown') {
-      this.cameraController.snapTarget(0, 0, 0);
+      const pw = tileToWorld(sim.player.pos.x, sim.player.pos.y);
+      this.cameraController.snapTarget(pw.x, 0, pw.z);
     } else {
       this.cameraController.setTarget(playerWorld.x, 0, playerWorld.z);
     }

@@ -10,8 +10,8 @@ const PITCH = 55 * (Math.PI / 180); // ~55 degrees from horizontal
 const ROTATE_SPEED = 2.0; // radians per second
 const ZOOM_SPEED = 0.8;
 const MIN_DISTANCE = 4;
-const MAX_DISTANCE = 20;
-const DEFAULT_DISTANCE = 10;
+const MAX_DISTANCE = 30;
+const DEFAULT_DISTANCE = 18;
 const TARGET_LERP_ALPHA = 0.1;
 
 export class CameraController {

@@ -38,6 +38,12 @@ export class InputManager {
     const tile = this.renderer3D.screenToTile(e.clientX, e.clientY);
     if (!tile) return;
 
+    // Clamped clicks (outside arena) always queue movement, never attack
+    if (tile.clamped) {
+      this.sim.queueMove(tile);
+      return;
+    }
+
     // Check if click is on boss footprint
     if (this.sim.boss.occupies(tile.x, tile.y)) {
       this.sim.queueAttackTarget('boss');
