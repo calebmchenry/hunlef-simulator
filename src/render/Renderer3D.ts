@@ -4,13 +4,15 @@
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as cloneSkinnedObject } from 'three/addons/utils/SkeletonUtils.js';
 import type { GameSimulation } from '../engine/GameSimulation.ts';
 import type { Projectile } from '../entities/Projectile.ts';
-import type { AttackStyle, Position } from '../entities/types.ts';
+import type { AttackStyle, Position, WeaponType } from '../entities/types.ts';
 import { loadModelFromJSON } from './ModelLoader.ts';
 import type { OSRSModelJSON } from './ModelLoader.ts';
 import { CameraController } from './CameraController.ts';
 import { AnimationController } from './AnimationController.ts';
+import { PlayerAnimationController } from './PlayerAnimationController.ts';
 import { OVERHEAD_ICONS } from './assets.ts';
 
 // Import model JSON data (fallback if GLTF fails to load)
@@ -23,8 +25,11 @@ const TILE_SIZE_PX = 48; // projectile coordinates are still in pixel space
 const HALF_GRID = GRID_SIZE / 2; // 6
 
 // Boss model scaling: OSRS model spans ~675 units in X, boss occupies 5 tiles (= 5 units in 3D).
-const MODEL_SCALE = 5 / 675;
+const BOSS_MODEL_SCALE = 5 / 675;
+const PLAYER_MODEL_SCALE = 1 / 200;
 const BOSS_MODEL_YAW_OFFSET = Math.PI; // OSRS model faces -Z, Three.js expects +Z
+const PLAYER_MODEL_YAW_OFFSET = Math.PI; // Player exports also face -Z
+const PLAYER_OVERHEAD_Y = 1.1;
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
@@ -48,6 +53,11 @@ function entityCenterToWorld(tileX: number, tileY: number, size: number): THREE.
   );
 }
 
+interface PlayerGLTFAsset {
+  scene: THREE.Object3D;
+  animations: THREE.AnimationClip[];
+}
+
 export class Renderer3D {
   private webglRenderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
@@ -63,8 +73,18 @@ export class Renderer3D {
   private bossStyleIndicator: THREE.Mesh;
   private animController: AnimationController | null = null;
 
-  // Player mesh
-  private playerMesh: THREE.Mesh;
+  // Player model (GLTF assembly or fallback box)
+  private playerGroup: THREE.Group;
+  private playerFallbackMesh: THREE.Mesh;
+  private playerAnimController: PlayerAnimationController | null = null;
+  private playerBodyVariants: Map<WeaponType, PlayerGLTFAsset> = new Map();
+  private playerWeaponModels: Map<WeaponType, THREE.Object3D> = new Map();
+  private playerHelmModel: THREE.Object3D | null = null;
+  private playerLegsModel: THREE.Object3D | null = null;
+  private currentPlayerWeapon: WeaponType | null = null;
+  private playerAssetsLoaded: boolean = false;
+  private playerAssetsFailed: boolean = false;
+  private playerModelDirty: boolean = true;
   private targetTileIndicator: THREE.Mesh;
 
   // Overhead sprites
@@ -115,6 +135,8 @@ export class Renderer3D {
   // Track boss state for animation triggers
   private lastBossStyle: AttackStyle | null = null;
   private lastBossAttackTick: number = -1;
+  private lastPlayerAttackTick: number = -1;
+  private lastPlayerEatTick: number = -1;
 
   // The canvas element (for InputManager compatibility)
   readonly canvas: HTMLCanvasElement;
@@ -180,12 +202,18 @@ export class Renderer3D {
     // Load tornado GLTF
     this.loadTornadoGLTF();
 
-    // Player mesh (cyan box, 1 tile)
-    const playerGeo = new THREE.BoxGeometry(0.6, 1.2, 0.6);
-    const playerMat = new THREE.MeshLambertMaterial({ color: 0x44cccc });
-    this.playerMesh = new THREE.Mesh(playerGeo, playerMat);
-    this.playerMesh.position.y = 0.6;
-    this.scene.add(this.playerMesh);
+    // Player group: start with the old cyan box fallback until GLTFs load.
+    this.playerGroup = new THREE.Group();
+    this.scene.add(this.playerGroup);
+
+    this.playerFallbackMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 1.2, 0.6),
+      new THREE.MeshLambertMaterial({ color: 0x44cccc }),
+    );
+    this.playerFallbackMesh.position.y = 0.6;
+    this.playerGroup.add(this.playerFallbackMesh);
+
+    void this.loadPlayerGLTFs();
 
     // Target tile indicator (flat ring on ground)
     const targetGeo = new THREE.RingGeometry(0.3, 0.48, 4);
@@ -267,6 +295,37 @@ export class Renderer3D {
     this.scene.add(gridLines);
   }
 
+  private applyUnlitMaterials(root: THREE.Object3D, logMorphTargets: boolean = false): void {
+    root.traverse((child) => {
+      if (!(child as THREE.Mesh).isMesh) return;
+
+      const mesh = child as THREE.Mesh;
+      const geom = mesh.geometry as THREE.BufferGeometry;
+      const hasColors = !!geom.getAttribute('color');
+      const morphCount = geom.morphAttributes.position?.length ?? 0;
+      if (logMorphTargets && morphCount > 0) {
+        console.log(`[Renderer3D] GLTF morph targets: ${morphCount}`);
+      }
+
+      const usesMaterialArray = Array.isArray(mesh.material);
+      const oldMaterials = (usesMaterialArray ? mesh.material : [mesh.material]) as THREE.Material[];
+      const nextMaterials = oldMaterials.map((material: THREE.Material) => {
+        const oldMat = material as THREE.MeshStandardMaterial;
+        const hasMap = !!oldMat.map;
+
+        return new THREE.MeshBasicMaterial({
+          vertexColors: hasColors,
+          map: hasMap ? oldMat.map : null,
+          transparent: oldMat.transparent || false,
+          opacity: oldMat.opacity ?? 1,
+          side: THREE.DoubleSide,
+        });
+      });
+
+      mesh.material = usesMaterialArray ? nextMaterials : nextMaterials[0];
+    });
+  }
+
   /** Try to load the animated GLTF model; fall back to static JSON if it fails */
   private loadBossGLTF(): void {
     const loader = new GLTFLoader();
@@ -275,38 +334,8 @@ export class Renderer3D {
       (gltf) => {
         // GLTF loaded successfully
         const model = gltf.scene;
-        model.scale.set(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
-
-        // Replace PBR materials with unlit MeshBasicMaterial while preserving
-        // whichever color source the model actually uses (vertex colors or texture maps).
-        gltf.scene.traverse((child) => {
-          if ((child as THREE.Mesh).isMesh) {
-            const mesh = child as THREE.Mesh;
-            const geom = mesh.geometry as THREE.BufferGeometry;
-            const hasColors = !!geom.getAttribute('color');
-            const morphCount = geom.morphAttributes.position?.length ?? 0;
-            if (morphCount > 0) {
-              console.log(`[Renderer3D] GLTF morph targets: ${morphCount}`);
-            }
-
-            const usesMaterialArray = Array.isArray(mesh.material);
-            const oldMaterials = (usesMaterialArray ? mesh.material : [mesh.material]) as THREE.Material[];
-            const nextMaterials = oldMaterials.map((material: THREE.Material) => {
-              const oldMat = material as THREE.MeshStandardMaterial;
-              const hasMap = !!oldMat.map;
-
-              return new THREE.MeshBasicMaterial({
-                vertexColors: hasColors,
-                map: hasMap ? oldMat.map : null,
-                transparent: oldMat.transparent || false,
-                opacity: oldMat.opacity ?? 1,
-                side: THREE.DoubleSide,
-              });
-            });
-
-            mesh.material = usesMaterialArray ? nextMaterials : nextMaterials[0];
-          }
-        });
+        model.scale.set(BOSS_MODEL_SCALE, BOSS_MODEL_SCALE, BOSS_MODEL_SCALE);
+        this.applyUnlitMaterials(gltf.scene, true);
 
         this.bossGroup.add(model);
 
@@ -337,7 +366,7 @@ export class Renderer3D {
     });
 
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.scale.set(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
+    mesh.scale.set(BOSS_MODEL_SCALE, BOSS_MODEL_SCALE, BOSS_MODEL_SCALE);
     this.bossGroup.add(mesh);
   }
 
@@ -364,6 +393,116 @@ export class Renderer3D {
         this.tornadoTemplate = group;
       },
     );
+  }
+
+  private async loadPlayerGLTFs(): Promise<void> {
+    const loader = new GLTFLoader();
+
+    try {
+      const [
+        bodyBow,
+        bodyStaff,
+        bodyHalberd,
+        helm,
+        legs,
+        bow,
+        staff,
+        halberd,
+      ] = await Promise.all([
+        loader.loadAsync('/models/player_body_bow.gltf'),
+        loader.loadAsync('/models/player_body_staff.gltf'),
+        loader.loadAsync('/models/player_body_halberd.gltf'),
+        loader.loadAsync('/models/player_helm.gltf'),
+        loader.loadAsync('/models/player_legs.gltf'),
+        loader.loadAsync('/models/player_bow.gltf'),
+        loader.loadAsync('/models/player_staff.gltf'),
+        loader.loadAsync('/models/player_halberd.gltf'),
+      ]);
+
+      this.applyUnlitMaterials(bodyBow.scene);
+      this.applyUnlitMaterials(bodyStaff.scene);
+      this.applyUnlitMaterials(bodyHalberd.scene);
+      this.applyUnlitMaterials(helm.scene);
+      this.applyUnlitMaterials(legs.scene);
+      this.applyUnlitMaterials(bow.scene);
+      this.applyUnlitMaterials(staff.scene);
+      this.applyUnlitMaterials(halberd.scene);
+
+      this.playerBodyVariants.set('bow', { scene: bodyBow.scene, animations: bodyBow.animations });
+      this.playerBodyVariants.set('staff', { scene: bodyStaff.scene, animations: bodyStaff.animations });
+      this.playerBodyVariants.set('halberd', { scene: bodyHalberd.scene, animations: bodyHalberd.animations });
+
+      this.playerHelmModel = helm.scene;
+      this.playerLegsModel = legs.scene;
+      this.playerWeaponModels.set('bow', bow.scene);
+      this.playerWeaponModels.set('staff', staff.scene);
+      this.playerWeaponModels.set('halberd', halberd.scene);
+
+      this.playerAssetsLoaded = true;
+      this.playerAssetsFailed = false;
+      this.playerModelDirty = true;
+
+      if (this.currentPlayerWeapon) {
+        this.setPlayerModel(this.currentPlayerWeapon);
+      }
+
+      console.log('[Renderer3D] Player GLTFs loaded');
+    } catch (error) {
+      this.playerAssetsLoaded = false;
+      this.playerAssetsFailed = true;
+      this.playerModelDirty = true;
+      console.warn('[Renderer3D] Player GLTF load failed, using cyan box fallback', error);
+
+      if (!this.currentPlayerWeapon) {
+        this.showPlayerFallback();
+      }
+    }
+  }
+
+  private scalePlayerPart(part: THREE.Object3D): THREE.Object3D {
+    part.scale.set(PLAYER_MODEL_SCALE, PLAYER_MODEL_SCALE, PLAYER_MODEL_SCALE);
+    return part;
+  }
+
+  private clearPlayerGroup(): void {
+    this.playerAnimController?.dispose();
+    this.playerAnimController = null;
+    this.playerGroup.clear();
+  }
+
+  private showPlayerFallback(): void {
+    this.clearPlayerGroup();
+    this.playerGroup.add(this.playerFallbackMesh);
+  }
+
+  private setPlayerModel(weaponType: WeaponType): void {
+    this.currentPlayerWeapon = weaponType;
+    this.playerModelDirty = false;
+
+    if (!this.playerAssetsLoaded || this.playerAssetsFailed) {
+      this.showPlayerFallback();
+      return;
+    }
+
+    const bodyAsset = this.playerBodyVariants.get(weaponType);
+    const weaponModel = this.playerWeaponModels.get(weaponType);
+    if (!bodyAsset || !weaponModel || !this.playerHelmModel || !this.playerLegsModel) {
+      console.warn(`[Renderer3D] Missing player GLTF asset(s) for ${weaponType}, using cyan box fallback`);
+      this.showPlayerFallback();
+      return;
+    }
+
+    const body = this.scalePlayerPart(cloneSkinnedObject(bodyAsset.scene));
+    const helm = this.scalePlayerPart(this.playerHelmModel.clone(true));
+    const legs = this.scalePlayerPart(this.playerLegsModel.clone(true));
+    const weapon = this.scalePlayerPart(weaponModel.clone(true));
+
+    this.clearPlayerGroup();
+    this.playerGroup.add(body);
+    this.playerGroup.add(helm);
+    this.playerGroup.add(legs);
+    this.playerGroup.add(weapon);
+    this.playerAnimController = new PlayerAnimationController(body, bodyAsset.animations);
   }
 
   private createOverheadSprite(): THREE.Sprite {
@@ -423,6 +562,8 @@ export class Renderer3D {
     // Update entities
     this.updateBoss(sim, tickProgress);
     const playerWorld = this.updatePlayer(sim, tickProgress);
+    this.updatePlayerAnimations(sim);
+    this.playerAnimController?.update(dt);
     if (sim.state === 'countdown') {
       this.cameraController.snapTarget(0, 0, 0);
     } else {
@@ -515,18 +656,50 @@ export class Renderer3D {
 
   private updatePlayer(sim: GameSimulation, tickProgress: number): { x: number; z: number } {
     const player = sim.player;
+    const weaponType = player.loadout.weapon.type;
+    if (weaponType !== this.currentPlayerWeapon || this.playerModelDirty) {
+      this.setPlayerModel(weaponType);
+    }
+
     const prevWorld = tileToWorld(player.prevPos.x, player.prevPos.y);
     const currWorld = tileToWorld(player.pos.x, player.pos.y);
     const worldX = lerp(prevWorld.x, currWorld.x, tickProgress);
     const worldZ = lerp(prevWorld.z, currWorld.z, tickProgress);
 
-    this.playerMesh.position.set(
-      worldX,
-      0.6,
-      worldZ,
-    );
+    this.playerGroup.position.set(worldX, 0, worldZ);
+
+    const dx = this.bossGroup.position.x - worldX;
+    const dz = this.bossGroup.position.z - worldZ;
+    if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
+      this.playerGroup.rotation.y = Math.atan2(dx, dz) + PLAYER_MODEL_YAW_OFFSET;
+    }
 
     return { x: worldX, z: worldZ };
+  }
+
+  private updatePlayerAnimations(sim: GameSimulation): void {
+    if (!this.playerAnimController) return;
+
+    if (sim.playerAteThisTick && sim.tick !== this.lastPlayerEatTick) {
+      this.lastPlayerEatTick = sim.tick;
+      this.playerAnimController.playEat();
+      return;
+    }
+
+    if (sim.tick !== this.lastPlayerAttackTick && this.didPlayerAttackThisTick(sim)) {
+      this.lastPlayerAttackTick = sim.tick;
+      this.playerAnimController.playAttack();
+    }
+  }
+
+  private didPlayerAttackThisTick(sim: GameSimulation): boolean {
+    for (let i = sim.projectiles.length - 1; i >= 0; i--) {
+      const proj = sim.projectiles[i];
+      if (proj.source !== 'player') continue;
+      if (proj.fireTick !== sim.tick) continue;
+      return true;
+    }
+    return false;
   }
 
   private updateTargetTile(sim: GameSimulation): void {
@@ -549,8 +722,8 @@ export class Renderer3D {
       if (tex) {
         (this.playerOverheadSprite.material as THREE.SpriteMaterial).map = tex;
         this.playerOverheadSprite.visible = true;
-        const pp = this.playerMesh.position;
-        this.playerOverheadSprite.position.set(pp.x, pp.y + 1.0, pp.z);
+        const pp = this.playerGroup.position;
+        this.playerOverheadSprite.position.set(pp.x, pp.y + PLAYER_OVERHEAD_Y, pp.z);
       }
     } else {
       this.playerOverheadSprite.visible = false;
@@ -823,6 +996,9 @@ export class Renderer3D {
 
   /** Clean up Three.js resources */
   dispose(): void {
+    this.playerAnimController?.dispose();
+    this.playerFallbackMesh.geometry.dispose();
+    (this.playerFallbackMesh.material as THREE.Material).dispose();
     this.webglRenderer.dispose();
     this.cameraController.destroy();
     this.countdownEl.remove();
