@@ -24,6 +24,7 @@ const HALF_GRID = GRID_SIZE / 2; // 6
 
 // Boss model scaling: OSRS model spans ~675 units in X, boss occupies 5 tiles (= 5 units in 3D).
 const MODEL_SCALE = 5 / 675;
+const BOSS_MODEL_YAW_OFFSET = Math.PI; // OSRS model faces -Z, Three.js expects +Z
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
@@ -276,32 +277,36 @@ export class Renderer3D {
         const model = gltf.scene;
         model.scale.set(MODEL_SCALE, MODEL_SCALE, MODEL_SCALE);
 
-        // Bug 1 fix: Replace PBR materials with unlit MeshBasicMaterial
-        // to preserve vibrant OSRS vertex colors (MeshStandardMaterial washes them out).
-        let hasVertexColors = false;
+        // Replace PBR materials with unlit MeshBasicMaterial while preserving
+        // whichever color source the model actually uses (vertex colors or texture maps).
         gltf.scene.traverse((child) => {
           if ((child as THREE.Mesh).isMesh) {
             const mesh = child as THREE.Mesh;
             const geom = mesh.geometry as THREE.BufferGeometry;
-            if (geom.getAttribute('color')) {
-              hasVertexColors = true;
+            const hasColors = !!geom.getAttribute('color');
+            const morphCount = geom.morphAttributes.position?.length ?? 0;
+            if (morphCount > 0) {
+              console.log(`[Renderer3D] GLTF morph targets: ${morphCount}`);
             }
-            const oldMat = mesh.material as THREE.MeshStandardMaterial;
-            mesh.material = new THREE.MeshBasicMaterial({
-              vertexColors: true,
-              transparent: oldMat.transparent || false,
-              opacity: oldMat.opacity ?? 1,
-              side: THREE.DoubleSide,
+
+            const usesMaterialArray = Array.isArray(mesh.material);
+            const oldMaterials = (usesMaterialArray ? mesh.material : [mesh.material]) as THREE.Material[];
+            const nextMaterials = oldMaterials.map((material: THREE.Material) => {
+              const oldMat = material as THREE.MeshStandardMaterial;
+              const hasMap = !!oldMat.map;
+
+              return new THREE.MeshBasicMaterial({
+                vertexColors: hasColors,
+                map: hasMap ? oldMat.map : null,
+                transparent: oldMat.transparent || false,
+                opacity: oldMat.opacity ?? 1,
+                side: THREE.DoubleSide,
+              });
             });
+
+            mesh.material = usesMaterialArray ? nextMaterials : nextMaterials[0];
           }
         });
-
-        // If GLTF didn't include vertex colors, fall back to JSON model
-        if (!hasVertexColors) {
-          console.warn('[Renderer3D] GLTF has no vertex colors, falling back to JSON model');
-          this.loadBossJSON();
-          return;
-        }
 
         this.bossGroup.add(model);
 
@@ -500,7 +505,7 @@ export class Renderer3D {
     const dz = playerZ - this.bossGroup.position.z;
     // Only rotate if player is not directly on top of boss (avoid jitter)
     if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
-      this.bossGroup.rotation.y = Math.atan2(dx, dz);
+      this.bossGroup.rotation.y = Math.atan2(dx, dz) + BOSS_MODEL_YAW_OFFSET;
     }
 
     this.bossStyleIndicator.position.set(worldPos.x, 0.03, worldPos.z);
