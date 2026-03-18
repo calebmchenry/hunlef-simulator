@@ -11,6 +11,11 @@ import type { FKeyConfig } from '../input/KeyBindManager.ts';
 import { DEFAULT_FKEY_CONFIG } from '../input/KeyBindManager.ts';
 
 const FKEY_OPTIONS = ['Escape', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'];
+const WEAPON_TYPE_OPTIONS: Array<{ value: WeaponType; label: string }> = [
+  { value: 'staff', label: 'Staff' },
+  { value: 'bow', label: 'Bow' },
+  { value: 'halberd', label: 'Halberd' },
+];
 
 export class LoadoutScreen {
   private container: HTMLElement;
@@ -125,7 +130,7 @@ export class LoadoutScreen {
     const startBtn = this.container.querySelector('#start-btn') as HTMLButtonElement;
 
     const updateSlotCount = () => {
-      const weapons = 1 + (secondaryTypeSelect.value ? 1 : 0);
+      const weapons = secondaryTypeSelect.value ? 1 : 0;
       const paddlefish = Math.max(0, Number(paddlefishInput.value) || 0);
       const corrupted = Math.max(0, Number(corruptedInput.value) || 0);
       const doses = Math.max(0, Number(egniolInput.value) || 0);
@@ -133,6 +138,27 @@ export class LoadoutScreen {
       const total = weapons + vials + paddlefish + corrupted;
       slotCounter.textContent = `Slots: ${total}/28`;
       slotCounter.style.color = total > 28 ? '#cc4444' : '#888';
+    };
+
+    const updateSecondaryOptions = () => {
+      const primaryType = weaponTypeSelect.value as WeaponType;
+      const currentSecondary = secondaryTypeSelect.value as WeaponType | '';
+      const availableSecondaryTypes = WEAPON_TYPE_OPTIONS.filter(option => option.value !== primaryType);
+
+      secondaryTypeSelect.innerHTML = [
+        '<option value="">None</option>',
+        ...availableSecondaryTypes.map(
+          option => `<option value="${option.value}">${option.label}</option>`
+        ),
+      ].join('');
+
+      const nextSecondary = availableSecondaryTypes.some(option => option.value === currentSecondary)
+        ? currentSecondary
+        : '';
+
+      secondaryTypeSelect.value = nextSecondary;
+      secondaryTierRow.style.display = nextSecondary ? 'flex' : 'none';
+      updateSlotCount();
     };
 
     const validateFkeys = (): boolean => {
@@ -161,7 +187,10 @@ export class LoadoutScreen {
     };
 
     armorSelect.addEventListener('change', updatePreview);
-    weaponTypeSelect.addEventListener('change', updatePreview);
+    weaponTypeSelect.addEventListener('change', () => {
+      updateSecondaryOptions();
+      updatePreview();
+    });
     weaponTierSelect.addEventListener('change', updatePreview);
     paddlefishInput.addEventListener('input', updateSlotCount);
     corruptedInput.addEventListener('input', updateSlotCount);
@@ -169,6 +198,7 @@ export class LoadoutScreen {
     fkeyInventory.addEventListener('change', validateFkeys);
     fkeyPrayer.addEventListener('change', validateFkeys);
     fkeyEquipment.addEventListener('change', validateFkeys);
+    updateSecondaryOptions();
     updatePreview();
     updateSlotCount();
 
@@ -191,7 +221,7 @@ export class LoadoutScreen {
         fkeyConfig,
       };
 
-      if (secondaryTypeSelect.value) {
+      if (secondaryTypeSelect.value && secondaryTypeSelect.value !== weaponTypeSelect.value) {
         config.secondaryWeaponType = secondaryTypeSelect.value as WeaponType;
         config.secondaryWeaponTier = Number(secondaryTierSelect.value) as 1 | 2 | 3;
       }

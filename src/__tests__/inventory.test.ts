@@ -393,6 +393,57 @@ describe('GameSimulation inventory actions', () => {
     expect(sim.player.inventory.slots[bowIdx]!.name).toContain('Staff');
   });
 
+  it('weapon switch leaves loadout config immutable', () => {
+    const sim = createSim({
+      weaponType: 'staff',
+      weaponTier: 2,
+      secondaryWeaponType: 'bow',
+      secondaryWeaponTier: 3,
+    });
+    sim.boss.attackCooldown = 100;
+
+    const bowIdx = sim.player.inventory.slots.findIndex(s => s?.id === 'bow_3');
+    expect(bowIdx).toBeGreaterThan(-1);
+
+    sim.useInventoryItem(bowIdx);
+    sim.processTick();
+
+    expect(sim.player.loadout.weapon.type).toBe('bow');
+    expect(sim.player.loadout.weapon.tier).toBe(3);
+    expect(sim.player.loadout.config.weaponType).toBe('staff');
+    expect(sim.player.loadout.config.weaponTier).toBe(2);
+    expect(sim.player.inventory.slots[bowIdx]!.id).toBe('staff_2');
+  });
+
+  it('double weapon swap uses the currently equipped weapon each time', () => {
+    const sim = createSim({
+      weaponType: 'staff',
+      weaponTier: 2,
+      secondaryWeaponType: 'bow',
+      secondaryWeaponTier: 3,
+    });
+    sim.boss.attackCooldown = 100;
+
+    const weaponIdx = sim.player.inventory.slots.findIndex(s => s?.id === 'bow_3');
+    expect(weaponIdx).toBeGreaterThan(-1);
+
+    sim.useInventoryItem(weaponIdx);
+    sim.processTick();
+
+    expect(sim.player.loadout.weapon.type).toBe('bow');
+    expect(sim.player.loadout.weapon.tier).toBe(3);
+    expect(sim.player.inventory.slots[weaponIdx]!.id).toBe('staff_2');
+
+    sim.useInventoryItem(weaponIdx);
+    sim.processTick();
+
+    expect(sim.player.loadout.weapon.type).toBe('staff');
+    expect(sim.player.loadout.weapon.tier).toBe(2);
+    expect(sim.player.inventory.slots[weaponIdx]!.id).toBe('bow_3');
+    expect(sim.player.loadout.config.weaponType).toBe('staff');
+    expect(sim.player.loadout.config.weaponTier).toBe(2);
+  });
+
   it('determinism preserved with inventory actions', () => {
     const config = createConfig({ paddlefishCount: 6, egniolDoses: 4 });
     const loadout1 = new Loadout(config);

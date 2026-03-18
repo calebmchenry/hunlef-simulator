@@ -12,7 +12,7 @@ import {
   magicMaxHit, magicAttackRoll,
   hitChance, npcDefenceRoll,
 } from '../combat/formulas.ts';
-import { PROTECTED_MAX_HIT, UNPROTECTED_MAX_HIT, STOMP_MAX_HIT, TORNADO_DAMAGE, WEAPONS } from '../equipment/items.ts';
+import { PROTECTED_MAX_HIT, UNPROTECTED_MAX_HIT, STOMP_MAX_HIT, TORNADO_DAMAGE } from '../equipment/items.ts';
 import type { Loadout } from '../equipment/Loadout.ts';
 import type { HitSplat, AttackStyle, Position, ProtectionStyle, Tornado } from '../entities/types.ts';
 import type { InventoryAction } from '../entities/Inventory.ts';
@@ -599,18 +599,14 @@ export class GameSimulation {
         break;
       }
       case 'equip': {
-        const oldType = player.loadout.config.weaponType;
-        const oldTier = player.loadout.config.weaponTier;
-        const oldWeapon = WEAPONS[oldType][oldTier];
+        const oldWeapon = player.loadout.weapon;
         player.loadout.switchWeapon(action.weaponType, action.weaponTier);
-        player.loadout.config.weaponType = action.weaponType;
-        player.loadout.config.weaponTier = action.weaponTier;
         const slotItem = inv.slots[action.slotIndex];
         if (slotItem) {
-          slotItem.id = `${oldType}_${oldTier}`;
+          slotItem.id = `${oldWeapon.type}_${oldWeapon.tier}`;
           slotItem.name = oldWeapon.name;
           slotItem.category = 'weapon';
-          const spriteKey = `${oldType}_${oldTier}` as keyof typeof ITEM_SPRITES;
+          const spriteKey = `${oldWeapon.type}_${oldWeapon.tier}` as keyof typeof ITEM_SPRITES;
           slotItem.spriteUrl = ITEM_SPRITES[spriteKey] ?? '';
         }
         break;
