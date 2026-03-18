@@ -12,7 +12,7 @@ Scope begins at the start of the boss fight; pre-fight Gauntlet prep is out of s
 - Player inputs queue during a tick and resolve at the start of the next tick
 - Movement: 1 tile/tick walking, 2 tiles/tick running
 - Prayer switches take effect the tick after the input is registered
-- Eating standard food occupies the action slot for that tick; combo food (corrupted paddlefish) can be eaten the same tick as a regular fish with no delay
+- Eating standard food delays the player's next attack by 3 ticks (`attackCooldown = max(current, 3)`); combo food (corrupted paddlefish) can be eaten the same tick as a regular fish with no delay
 
 ---
 
@@ -91,7 +91,7 @@ Attack speed inside the Gauntlet = 4 ticks (special override; normally 7 ticks o
 #### Fish
 | Type | HP Healed | Eat Delay | Notes |
 |------|----------|----------|-------|
-| Paddlefish | 20 HP | 1 tick | Standard food |
+| Paddlefish | 20 HP | 3 ticks | Standard food |
 | Corrupted paddlefish | 16 HP | None | Combo food — instant eat, can follow standard food in same tick |
 
 Combo-eating: one standard paddlefish + one corrupted paddlefish in the same tick = up to 36 HP healed simultaneously.

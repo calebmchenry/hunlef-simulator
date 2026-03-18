@@ -119,7 +119,7 @@ export class Boss {
     this.hp = 1000;
     this.currentStyle = 'ranged';
     this.attackCounter = 0;
-    this.attackCooldown = 5;
+    this.attackCooldown = this.attackSpeed;
     this.totalDamageDealt = 0;
     this.protectionStyle = 'ranged';
     this.offPrayerHitCount = 0;

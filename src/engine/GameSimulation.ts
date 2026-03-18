@@ -394,6 +394,11 @@ export class GameSimulation {
     if (this.player.attackCooldown > 0) {
       this.player.attackCooldown--;
     }
+    // OSRS eat delay: standard food delays the next attack by 3 ticks.
+    // Applied after decrement so the eat tick does not consume a delay tick.
+    if (this.playerAteThisTick) {
+      this.player.attackCooldown = Math.max(this.player.attackCooldown, 3);
+    }
     if (this.player.attackTarget === 'boss' && this.player.attackCooldown <= 0 && !this.playerAteThisTick) {
       const weapon = this.player.loadout.weapon;
       const dist = this.boss.chebyshevDistTo(this.player.pos);

@@ -22,6 +22,10 @@ function createSim(configOverrides: Partial<LoadoutConfig> = {}, seed = 42): Gam
   return new GameSimulation(loadout, seed, { skipCountdown: true });
 }
 
+function countPlayerProjectiles(sim: GameSimulation): number {
+  return sim.projectiles.filter(projectile => projectile.source === 'player').length;
+}
+
 describe('Inventory', () => {
   describe('buildFromLoadout', () => {
     it('populates correct number of items', () => {
@@ -224,6 +228,127 @@ describe('GameSimulation inventory actions', () => {
     // Item should still be there since eating at full HP is a no-op
     expect(sim.player.inventory.slots[idx]).not.toBeNull();
     expect(sim.playerAteThisTick).toBe(false);
+  });
+
+  it('eating paddlefish at cooldown=0 delays the next attack by exactly 3 ticks', () => {
+    const sim = createSim();
+    sim.player.hp = 60;
+    sim.player.attackTarget = 'boss';
+    sim.player.attackCooldown = 0;
+    sim.boss.attackCooldown = 100;
+
+    const idx = sim.player.inventory.slots.findIndex(s => s?.id === 'paddlefish');
+    sim.useInventoryItem(idx);
+
+    sim.processTick();
+    expect(sim.player.attackCooldown).toBe(3);
+    expect(countPlayerProjectiles(sim)).toBe(0);
+
+    sim.processTick();
+    expect(sim.player.attackCooldown).toBe(2);
+    expect(countPlayerProjectiles(sim)).toBe(0);
+
+    sim.processTick();
+    expect(sim.player.attackCooldown).toBe(1);
+    expect(countPlayerProjectiles(sim)).toBe(0);
+
+    sim.processTick();
+    expect(countPlayerProjectiles(sim)).toBe(1);
+    expect(sim.player.attackCooldown).toBe(sim.player.loadout.weapon.attackSpeed);
+  });
+
+  it('eating paddlefish with cooldown >= 3 does not increase cooldown', () => {
+    const sim = createSim();
+    sim.player.hp = 60;
+    sim.player.attackTarget = 'boss';
+    sim.player.attackCooldown = 5;
+    sim.boss.attackCooldown = 100;
+
+    const idx = sim.player.inventory.slots.findIndex(s => s?.id === 'paddlefish');
+    sim.useInventoryItem(idx);
+    sim.processTick();
+
+    expect(sim.player.attackCooldown).toBe(4);
+    expect(countPlayerProjectiles(sim)).toBe(0);
+  });
+
+  it('eating paddlefish at cooldown=2 extends the delay back to 3 ticks', () => {
+    const sim = createSim();
+    sim.player.hp = 60;
+    sim.player.attackCooldown = 2;
+    sim.boss.attackCooldown = 100;
+
+    const idx = sim.player.inventory.slots.findIndex(s => s?.id === 'paddlefish');
+    sim.useInventoryItem(idx);
+    sim.processTick();
+
+    expect(sim.player.attackCooldown).toBe(3);
+  });
+
+  it('corrupted paddlefish does not add eat delay and still allows an attack that tick', () => {
+    const sim = createSim();
+    sim.player.hp = 60;
+    sim.player.attackTarget = 'boss';
+    sim.player.attackCooldown = 0;
+    sim.boss.attackCooldown = 100;
+
+    const idx = sim.player.inventory.slots.findIndex(s => s?.id === 'corrupted_paddlefish');
+    sim.useInventoryItem(idx);
+    sim.processTick();
+
+    expect(sim.playerAteThisTick).toBe(false);
+    expect(countPlayerProjectiles(sim)).toBe(1);
+    expect(sim.player.attackCooldown).toBe(sim.player.loadout.weapon.attackSpeed);
+  });
+
+  it('attempting to eat at full HP does not trigger eat delay and does not block an attack', () => {
+    const sim = createSim();
+    sim.player.hp = sim.player.maxHp;
+    sim.player.attackTarget = 'boss';
+    sim.player.attackCooldown = 0;
+    sim.boss.attackCooldown = 100;
+
+    const idx = sim.player.inventory.slots.findIndex(s => s?.id === 'paddlefish');
+    sim.useInventoryItem(idx);
+    sim.processTick();
+
+    expect(sim.player.inventory.slots[idx]).not.toBeNull();
+    expect(sim.playerAteThisTick).toBe(false);
+    expect(countPlayerProjectiles(sim)).toBe(1);
+    expect(sim.player.attackCooldown).toBe(sim.player.loadout.weapon.attackSpeed);
+  });
+
+  it('combo eating applies the standard-food delay but does not stack beyond 3 ticks', () => {
+    const sim = createSim();
+    sim.player.hp = 50;
+    sim.player.attackTarget = 'boss';
+    sim.player.attackCooldown = 0;
+    sim.boss.attackCooldown = 100;
+
+    const paddleIdx = sim.player.inventory.slots.findIndex(s => s?.id === 'paddlefish');
+    const corruptedIdx = sim.player.inventory.slots.findIndex(s => s?.id === 'corrupted_paddlefish');
+    sim.useInventoryItem(paddleIdx);
+    sim.useInventoryItem(corruptedIdx);
+    sim.processTick();
+
+    expect(sim.player.hp).toBe(86);
+    expect(sim.playerAteThisTick).toBe(true);
+    expect(sim.player.attackCooldown).toBe(3);
+    expect(countPlayerProjectiles(sim)).toBe(0);
+  });
+
+  it('boss reset uses attackSpeed when restoring attackCooldown', () => {
+    const sim = createSim();
+    Object.defineProperty(sim.boss, 'attackSpeed', {
+      value: 7,
+      writable: true,
+      configurable: true,
+    });
+
+    sim.boss.attackCooldown = 1;
+    sim.boss.reset({ x: 1, y: 1 });
+
+    expect(sim.boss.attackCooldown).toBe(7);
   });
 
   it('egniol potion restores floor(77/4)+7 = 26 prayer points', () => {
