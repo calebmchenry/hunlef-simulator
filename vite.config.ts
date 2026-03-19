@@ -2,7 +2,7 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: '/hunlef-simulator/',
+  base: process.env.CI ? '/hunlef-simulator/' : '/',
   test: {
     include: ['src/**/*.test.ts'],
   },
