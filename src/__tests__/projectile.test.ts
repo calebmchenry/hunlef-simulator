@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { rangedHitDelay, magicHitDelay, meleeHitDelay } from '../entities/Projectile.ts';
 import { GameSimulation } from '../engine/GameSimulation.ts';
 import { Loadout } from '../equipment/Loadout.ts';
+import { PROTECTED_MAX_HIT } from '../equipment/items.ts';
 
 // ---------- Unit tests for delay formulas ----------
 
@@ -36,6 +37,19 @@ function createSim(weaponType: 'bow' | 'staff' | 'halberd' = 'bow', seed = 42): 
   return new GameSimulation(loadout, seed, { skipCountdown: true });
 }
 
+function primePrayerDisableAttack(sim: GameSimulation): void {
+  sim.player.attackTarget = null;
+  sim.player.targetTile = null;
+  sim.player.pos = { x: 6, y: 10 };
+  sim.player.prevPos = { ...sim.player.pos };
+  sim.boss.currentStyle = 'magic';
+  sim.boss.cycleCount = 1;
+  sim.boss.attackCounter = 1;
+  sim.boss.prayerDisableSlot = 1;
+  sim.boss.pendingStyleSwitch = null;
+  sim.boss.attackCooldown = 1;
+}
+
 describe('Boss attack creates a projectile', () => {
   it('boss fires and a projectile is added to sim.projectiles', () => {
     const sim = createSim('bow');
@@ -49,6 +63,51 @@ describe('Boss attack creates a projectile', () => {
     const hasBossProjectile = sim.projectiles.some(p => p.source === 'boss');
     // Either a boss projectile is still in flight, or boss has attacked
     expect(hasBossProjectile || sim.lastBossAttackStyle !== null).toBe(true);
+  });
+
+  it('prayer-disable projectile clears all prayers on arrival', () => {
+    const sim = createSim('staff');
+    primePrayerDisableAttack(sim);
+    sim.prayerManager.activePrayer = 'magic';
+    sim.prayerManager.offensivePrayer = 'augury';
+
+    sim.processTick();
+
+    const proj = sim.projectiles.find(p => p.source === 'boss');
+    expect(proj).toBeDefined();
+    expect(proj?.style).toBe('magic');
+    expect(proj?.color).toBe('#6622aa');
+    expect(proj?.shape).toBe('orb');
+    expect(proj?.effect).toBe('disable_prayers');
+
+    while (sim.tick < (proj?.arrivalTick ?? 0)) {
+      sim.processTick();
+    }
+
+    expect(sim.prayerManager.activePrayer).toBeNull();
+    expect(sim.prayerManager.offensivePrayer).toBeNull();
+  });
+
+  it('prayer-disable damage is still reduced by the correct protection prayer', () => {
+    const sim = createSim('staff');
+    primePrayerDisableAttack(sim);
+    sim.prayerManager.activePrayer = 'magic';
+
+    sim.rng.nextInt = ((_min: number, max: number) => max) as typeof sim.rng.nextInt;
+
+    const hpBefore = sim.player.hp;
+    sim.processTick();
+
+    const proj = sim.projectiles.find(p => p.source === 'boss');
+    expect(proj).toBeDefined();
+    expect(proj?.damage).toBe(PROTECTED_MAX_HIT[3]);
+
+    while (sim.tick < (proj?.arrivalTick ?? 0)) {
+      sim.processTick();
+    }
+
+    expect(hpBefore - sim.player.hp).toBe(PROTECTED_MAX_HIT[3]);
+    expect(sim.prayerManager.activePrayer).toBeNull();
   });
 });
 

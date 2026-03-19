@@ -1,6 +1,6 @@
 import type { Position, AttackStyle, ProtectionStyle } from './types.ts';
 
-export type BossAttackResult = AttackStyle | 'tornado';
+export type BossAttackResult = AttackStyle | 'tornado' | 'prayer_disable';
 
 const PROTECTION_STYLES: ProtectionStyle[] = ['melee', 'magic', 'ranged'];
 
@@ -16,6 +16,8 @@ export class Boss {
   attackCooldown: number = 5; // fires when reaches 0, then resets to 5
   readonly attackSpeed: number = 5;
   cycleCount: number = 0; // increments when attackCounter resets
+  prayerDisableSlot: number = -1;
+  pendingStyleSwitch: { nextStyle: AttackStyle; triggerTick: number } | null = null;
 
   /** What combat style the boss is currently protecting against */
   protectionStyle: ProtectionStyle = 'ranged';
@@ -85,25 +87,54 @@ export class Boss {
     };
   }
 
-  /** Fire an attack and advance rotation. Returns the style used or 'tornado'. */
-  fireAttack(): BossAttackResult {
+  /** Pick the prayer-disable slot for the next magic phase. */
+  initMagicPhase(rngNext: () => number): void {
+    if (this.cycleCount % 2 === 1) {
+      this.prayerDisableSlot = Math.floor(rngNext() * 3) + 1;
+      return;
+    }
+
+    this.prayerDisableSlot = Math.floor(rngNext() * 4);
+  }
+
+  /** Fire an attack and advance rotation. Returns the style used or special attack type. */
+  fireAttack(currentTick: number = 0): BossAttackResult {
     // Check if this should be a tornado summon:
     // Every other cycle (odd cycles), first attack is tornado
     const isTornado = this.cycleCount % 2 === 1 && this.attackCounter === 0;
+    const isPrayerDisable = this.currentStyle === 'magic' && this.attackCounter === this.prayerDisableSlot;
 
     const style = this.currentStyle;
     this.attackCounter++;
     if (this.attackCounter >= 4) {
       this.attackCounter = 0;
       this.cycleCount++;
-      this.currentStyle = this.currentStyle === 'ranged' ? 'magic' : 'ranged';
+      const nextStyle = this.currentStyle === 'ranged' ? 'magic' : 'ranged';
+      this.pendingStyleSwitch = { nextStyle, triggerTick: currentTick + 2 };
     }
     this.attackCooldown = this.attackSpeed;
 
     if (isTornado) {
       return 'tornado';
     }
+    if (isPrayerDisable) {
+      return 'prayer_disable';
+    }
     return style;
+  }
+
+  maybeApplyStyleSwitch(currentTick: number): AttackStyle | null {
+    if (this.pendingStyleSwitch === null || currentTick < this.pendingStyleSwitch.triggerTick) {
+      return null;
+    }
+
+    this.currentStyle = this.pendingStyleSwitch.nextStyle;
+    this.pendingStyleSwitch = null;
+    if (this.currentStyle !== 'magic') {
+      this.prayerDisableSlot = -1;
+    }
+
+    return this.currentStyle;
   }
 
   /** Chebyshev distance from a point to the nearest tile of the boss */
@@ -124,5 +155,7 @@ export class Boss {
     this.protectionStyle = 'ranged';
     this.offPrayerHitCount = 0;
     this.cycleCount = 0;
+    this.prayerDisableSlot = -1;
+    this.pendingStyleSwitch = null;
   }
 }

@@ -73,6 +73,19 @@ interface MorphRetargetCandidate {
 }
 
 const MORPH_RETARGET_MARKER = '__cgMorphRetargeted';
+const ATTACK_MORPH_SCALE_MARKER = '__cgAttackMorphsScaled';
+const ATTACK_MORPH_SCALE = 0.35;
+const MORPH_TRACK_EPSILON = 1e-6;
+const BOSS_ATTACK_CLIP_NAMES = new Set([
+  'attack_magic',
+  'magic_attack',
+  'attack_ranged',
+  'ranged_attack',
+  '8430',
+  '8431',
+  'seq_8430',
+  'seq_8431',
+]);
 
 function parseMorphTrackBinding(trackName: string): MorphTrackBinding | null {
   const indexedMatch = trackName.match(/^(.+)(\.morphTargetInfluences\[(\d+)\])$/);
@@ -273,6 +286,142 @@ function retargetMorphAnimations(root: THREE.Object3D, clips: THREE.AnimationCli
   }
 }
 
+function formatMorphIndexSummary(indices: Iterable<number>): string {
+  const sorted = [...new Set(indices)].sort((a, b) => a - b);
+  if (sorted.length === 0) return '[]';
+
+  const ranges: string[] = [];
+  let rangeStart = sorted[0];
+  let rangeEnd = sorted[0];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const index = sorted[i];
+    if (index === rangeEnd + 1) {
+      rangeEnd = index;
+      continue;
+    }
+
+    ranges.push(rangeStart === rangeEnd ? `${rangeStart}` : `${rangeStart}-${rangeEnd}`);
+    rangeStart = index;
+    rangeEnd = index;
+  }
+
+  ranges.push(rangeStart === rangeEnd ? `${rangeStart}` : `${rangeStart}-${rangeEnd}`);
+  return `[${ranges.join(', ')}]`;
+}
+
+function getClipMorphIndices(clips: THREE.AnimationClip[]): Map<string, Set<number>> {
+  const clipMorphIndices = new Map<string, Set<number>>();
+
+  for (const clip of clips) {
+    const morphIndices = new Set<number>();
+
+    for (const track of clip.tracks) {
+      const binding = parseMorphTrackBinding(track.name);
+      if (!binding) continue;
+
+      if (binding.morphIndex !== null) {
+        morphIndices.add(binding.morphIndex);
+        continue;
+      }
+
+      const valueSize = track.getValueSize();
+      if (valueSize <= 0) continue;
+
+      const values = (track as { values?: ArrayLike<number> }).values;
+      if (!values || values.length === 0) continue;
+
+      for (let offset = 0; offset < values.length; offset += valueSize) {
+        for (let index = 0; index < valueSize && offset + index < values.length; index++) {
+          if (Math.abs(values[offset + index]) > MORPH_TRACK_EPSILON) {
+            morphIndices.add(index);
+          }
+        }
+      }
+    }
+
+    clipMorphIndices.set(clip.name, morphIndices);
+    console.log(
+      `[Renderer3D] getClipMorphIndices: clip "${clip.name}" uses ${morphIndices.size} ` +
+      `morph target(s) ${formatMorphIndexSummary(morphIndices)}`,
+    );
+  }
+
+  return clipMorphIndices;
+}
+
+function scaleBossAttackMorphDeltas(model: THREE.Object3D, clips: THREE.AnimationClip[]): void {
+  const clipMorphIndices = getClipMorphIndices(clips);
+  const attackClipNames = [...clipMorphIndices.keys()].filter((clipName) => BOSS_ATTACK_CLIP_NAMES.has(clipName));
+
+  if (attackClipNames.length === 0) {
+    console.log('[Renderer3D] scaleBossAttackMorphDeltas: no attack clips found');
+    return;
+  }
+
+  const attackMorphIndices = new Set<number>();
+  for (const clipName of attackClipNames) {
+    const clipIndices = clipMorphIndices.get(clipName);
+    if (!clipIndices) continue;
+    for (const morphIndex of clipIndices) {
+      attackMorphIndices.add(morphIndex);
+    }
+  }
+
+  if (attackMorphIndices.size === 0) {
+    console.log(
+      `[Renderer3D] scaleBossAttackMorphDeltas: attack clips ${attackClipNames.join(', ')} ` +
+      'did not resolve to any morph targets',
+    );
+    return;
+  }
+
+  let meshesProcessed = 0;
+  let geometriesScaled = 0;
+  let morphTargetsScaled = 0;
+
+  model.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (mesh.isMesh !== true) return;
+
+    const geometry = mesh.geometry as THREE.BufferGeometry;
+    const morphPositions = geometry.morphAttributes.position;
+    if (!Array.isArray(morphPositions) || morphPositions.length === 0) return;
+
+    meshesProcessed++;
+
+    if (geometry.userData[ATTACK_MORPH_SCALE_MARKER] === true) {
+      return;
+    }
+
+    let scaledOnGeometry = 0;
+    for (const morphIndex of attackMorphIndices) {
+      if (morphIndex >= morphPositions.length) continue;
+
+      const attribute = morphPositions[morphIndex] as THREE.BufferAttribute;
+      const values = attribute.array as ArrayLike<number> & { [index: number]: number; length: number };
+      for (let i = 0; i < values.length; i++) {
+        values[i] *= ATTACK_MORPH_SCALE;
+      }
+      attribute.needsUpdate = true;
+      scaledOnGeometry++;
+    }
+
+    if (scaledOnGeometry === 0) return;
+
+    geometry.userData[ATTACK_MORPH_SCALE_MARKER] = true;
+    geometriesScaled++;
+    morphTargetsScaled += scaledOnGeometry;
+  });
+
+  console.log(
+    `[Renderer3D] scaleBossAttackMorphDeltas: clips ${attackClipNames.join(', ')} ` +
+    `-> ${attackMorphIndices.size} morph target(s) ${formatMorphIndexSummary(attackMorphIndices)}; ` +
+    `processed ${meshesProcessed} mesh(es), scaled ${morphTargetsScaled} morph target(s) ` +
+    `across ${geometriesScaled} geometries at ${ATTACK_MORPH_SCALE}x`,
+  );
+}
+
 export class Renderer3D {
   private webglRenderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
@@ -352,8 +501,9 @@ export class Renderer3D {
   private lastFrameTime: number = 0;
 
   // Track boss state for animation triggers
-  private lastBossStyle: AttackStyle | null = null;
-  private lastBossAttackTick: number = -1;
+  private lastBossEventTick: number = -1;
+  private lastBossEventType: GameSimulation['lastBossEventType'] = null;
+  private lastBossStyleSwitchStyle: AttackStyle | null = null;
   private lastPlayerAttackTick: number = -1;
   private lastPlayerEatTick: number = -1;
 
@@ -648,6 +798,7 @@ export class Renderer3D {
         const model = gltf.scene;
         model.scale.set(BOSS_MODEL_SCALE, BOSS_MODEL_SCALE, BOSS_MODEL_SCALE);
         retargetMorphAnimations(model, gltf.animations);
+        scaleBossAttackMorphDeltas(model, gltf.animations);
         this.applyUnlitMaterials(gltf.scene, true);
 
         this.bossGroup.add(model);
@@ -926,35 +1077,45 @@ export class Renderer3D {
       return;
     }
 
-    // Attack animation trigger (only on ticks where a boss projectile was fired)
-    if (sim.tick !== this.lastBossAttackTick) {
-      const attackStyle = this.getBossAttackStyleThisTick(sim);
-      if (attackStyle) {
-        this.lastBossAttackTick = sim.tick;
-        this.animController.playAttack(attackStyle);
-      }
+    if (sim.lastBossEventTick < 0 || sim.lastBossEventType === null) {
+      return;
     }
 
-    // Style switch detection
-    const currentStyle = sim.boss.currentStyle;
-    if (this.lastBossStyle !== null && currentStyle !== this.lastBossStyle) {
-      if (currentStyle === 'magic' || currentStyle === 'ranged') {
-        this.animController.playStyleSwitch(currentStyle);
-      }
-    }
-    this.lastBossStyle = currentStyle;
-  }
+    const isNewEvent =
+      sim.lastBossEventTick !== this.lastBossEventTick ||
+      sim.lastBossEventType !== this.lastBossEventType ||
+      sim.lastBossStyleSwitchStyle !== this.lastBossStyleSwitchStyle;
 
-  private getBossAttackStyleThisTick(sim: GameSimulation): AttackStyle | null {
-    for (let i = sim.projectiles.length - 1; i >= 0; i--) {
-      const proj = sim.projectiles[i];
-      if (proj.source !== 'boss') continue;
-      if (proj.fireTick !== sim.tick) continue;
-      if (proj.style === 'magic' || proj.style === 'ranged') {
-        return proj.style;
-      }
+    if (!isNewEvent) {
+      return;
     }
-    return null;
+
+    this.lastBossEventTick = sim.lastBossEventTick;
+    this.lastBossEventType = sim.lastBossEventType;
+    this.lastBossStyleSwitchStyle = sim.lastBossStyleSwitchStyle;
+
+    switch (sim.lastBossEventType) {
+      case 'style_switch':
+        if (sim.lastBossStyleSwitchStyle !== null) {
+          this.animController.playStyleSwitch(sim.lastBossStyleSwitchStyle);
+        }
+        break;
+      case 'prayer_disable':
+        this.animController.playPrayerDisable();
+        break;
+      case 'tornado_stomp':
+      case 'stomp':
+        this.animController.playStomp();
+        break;
+      case 'attack_magic':
+        this.animController.playAttack('magic');
+        break;
+      case 'attack_ranged':
+        this.animController.playAttack('ranged');
+        break;
+      default:
+        break;
+    }
   }
 
   private updateBoss(sim: GameSimulation, tickProgress: number = 0): void {

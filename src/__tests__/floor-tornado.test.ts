@@ -9,6 +9,8 @@ function createSim(seed = 42, armorTier: 0 | 1 | 2 | 3 = 3): GameSimulation {
   return new GameSimulation(loadout, seed, { skipCountdown: true });
 }
 
+const CORNER_KEYS = new Set(['0,0', '11,0', '0,11', '11,11']);
+
 // ===== Floor Tile State Tests =====
 
 describe('FloorHazardManager', () => {
@@ -268,36 +270,15 @@ describe('Floor tile damage in simulation', () => {
 // ===== Tornado Tests =====
 
 describe('Boss tornado rotation', () => {
-  it('boss fires tornado on odd cycles (cycle 1, first attack)', () => {
+  it('boss fires tornado as the first counted attack of odd magic cycles', () => {
     const sim = createSim(42);
-    sim.player.attackTarget = 'boss';
+    sim.boss.currentStyle = 'magic';
+    sim.boss.cycleCount = 1;
+    sim.boss.attackCounter = 0;
+    sim.boss.initMagicPhase(() => 0.5);
 
-    // Fast-forward boss to fire attacks
-    // Cycle 0: 4 attacks (ranged), no tornado
-    // Cycle 1: first attack should be tornado
-    const results: string[] = [];
-
-    for (let i = 0; i < 10; i++) {
-      const result = sim.boss.fireAttack();
-      results.push(result);
-    }
-
-    // First 4 should be ranged (cycle 0)
-    expect(results[0]).toBe('ranged');
-    expect(results[1]).toBe('ranged');
-    expect(results[2]).toBe('ranged');
-    expect(results[3]).toBe('ranged');
-
-    // 5th should be tornado (cycle 1, first attack)
-    expect(results[4]).toBe('tornado');
-
-    // 6-8 should be magic
-    expect(results[5]).toBe('magic');
-    expect(results[6]).toBe('magic');
-    expect(results[7]).toBe('magic');
-
-    // 9th should be ranged (cycle 2, even, no tornado)
-    expect(results[8]).toBe('ranged');
+    expect(sim.boss.fireAttack(25)).toBe('tornado');
+    expect(sim.boss.attackCounter).toBe(1);
   });
 
   it('tornado count matches HP phase', () => {
@@ -307,18 +288,55 @@ describe('Boss tornado rotation', () => {
     // Force tornado spawn
     (sim1 as any).spawnTornadoes();
     expect(sim1.tornadoes.length).toBe(2);
+    expect(sim1.tornadoes.every(t => CORNER_KEYS.has(`${t.pos.x},${t.pos.y}`))).toBe(true);
 
     // Phase 2: 3 tornadoes
     const sim2 = createSim(42);
     sim2.boss.hp = 500;
     (sim2 as any).spawnTornadoes();
     expect(sim2.tornadoes.length).toBe(3);
+    expect(sim2.tornadoes.every(t => CORNER_KEYS.has(`${t.pos.x},${t.pos.y}`))).toBe(true);
 
     // Phase 3: 4 tornadoes
     const sim3 = createSim(42);
     sim3.boss.hp = 100;
     (sim3 as any).spawnTornadoes();
     expect(sim3.tornadoes.length).toBe(4);
+    expect(sim3.tornadoes.every(t => CORNER_KEYS.has(`${t.pos.x},${t.pos.y}`))).toBe(true);
+  });
+
+  it('tornadoes appear one tick after stomp and stay inactive until activeTick', () => {
+    const sim = createSim(42);
+    sim.player.attackTarget = null;
+    sim.player.targetTile = null;
+    sim.player.pos = { x: 6, y: 10 };
+    sim.player.prevPos = { ...sim.player.pos };
+    sim.boss.currentStyle = 'magic';
+    sim.boss.cycleCount = 1;
+    sim.boss.attackCounter = 0;
+    sim.boss.attackCooldown = 1;
+
+    sim.processTick();
+
+    expect(sim.lastBossEventType).toBe('tornado_stomp');
+    expect(sim.pendingTornadoSpawnTick).toBe(2);
+    expect(sim.tornadoes).toHaveLength(0);
+
+    sim.processTick();
+
+    expect(sim.tornadoes.length).toBe(2);
+    expect(sim.tornadoes.every(t => CORNER_KEYS.has(`${t.pos.x},${t.pos.y}`))).toBe(true);
+    expect(sim.tornadoes.every(t => t.activeTick === 3)).toBe(true);
+    const spawnedPositions = sim.tornadoes.map(t => ({ ...t.pos }));
+    expect(sim.player.totalDamageTaken).toBe(0);
+    expect(sim.tornadoes.map(t => ({ ...t.pos }))).toEqual(spawnedPositions);
+
+    sim.processTick();
+
+    expect(
+      sim.tornadoes.some((tornado, idx) =>
+        tornado.pos.x !== spawnedPositions[idx].x || tornado.pos.y !== spawnedPositions[idx].y),
+    ).toBe(true);
   });
 });
 

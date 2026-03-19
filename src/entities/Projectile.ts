@@ -24,6 +24,7 @@ export interface Projectile {
   /** Visual properties */
   color: string;
   shape: ProjectileShape;
+  effect?: 'disable_prayers';
 }
 
 /**

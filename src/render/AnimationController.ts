@@ -119,6 +119,11 @@ export class AnimationController {
     this.crossFadeTo('stomp');
   }
 
+  playPrayerDisable(): void {
+    if (this.currentState === 'death') return;
+    this.crossFadeTo('prayer_disable');
+  }
+
   playStyleSwitch(style: 'magic' | 'ranged'): void {
     if (this.currentState === 'death') return;
     const state: AnimState = style === 'magic' ? 'style_switch_mage' : 'style_switch_range';

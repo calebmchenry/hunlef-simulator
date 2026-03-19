@@ -7,41 +7,65 @@ describe('Boss', () => {
     expect(boss.currentStyle).toBe('ranged');
   });
 
-  it('fires 4 ranged then switches to magic', () => {
+  it('delays the style switch for 2 ticks after 4 counted attacks', () => {
     const boss = new Boss({ x: 4, y: 2 });
 
     // 4 ranged attacks (cycle 0, even — no tornado)
-    expect(boss.fireAttack()).toBe('ranged');
-    expect(boss.fireAttack()).toBe('ranged');
-    expect(boss.fireAttack()).toBe('ranged');
-    expect(boss.fireAttack()).toBe('ranged');
+    expect(boss.fireAttack(5)).toBe('ranged');
+    expect(boss.fireAttack(10)).toBe('ranged');
+    expect(boss.fireAttack(15)).toBe('ranged');
+    expect(boss.fireAttack(20)).toBe('ranged');
 
-    // Should have switched to magic
-    expect(boss.currentStyle).toBe('magic');
-
-    // Cycle 1 (odd): first attack is tornado, then 3 magic
-    expect(boss.fireAttack()).toBe('tornado');
-    expect(boss.fireAttack()).toBe('magic');
-    expect(boss.fireAttack()).toBe('magic');
-    expect(boss.fireAttack()).toBe('magic');
-
-    // Should have switched back to ranged
     expect(boss.currentStyle).toBe('ranged');
+    expect(boss.pendingStyleSwitch).toEqual({ nextStyle: 'magic', triggerTick: 22 });
+    expect(boss.maybeApplyStyleSwitch(21)).toBeNull();
+    expect(boss.currentStyle).toBe('ranged');
+    expect(boss.maybeApplyStyleSwitch(22)).toBe('magic');
+    expect(boss.currentStyle).toBe('magic');
+  });
+
+  it('fires prayer-disable exactly once per magic phase', () => {
+    const boss = new Boss({ x: 4, y: 2 });
+    boss.currentStyle = 'magic';
+    boss.cycleCount = 1;
+    boss.initMagicPhase(() => 0.5); // slot 2
+
+    const attacks = [
+      boss.fireAttack(25),
+      boss.fireAttack(30),
+      boss.fireAttack(35),
+      boss.fireAttack(40),
+    ];
+
+    expect(attacks).toEqual(['tornado', 'magic', 'prayer_disable', 'magic']);
+    expect(attacks.filter(attack => attack === 'prayer_disable')).toHaveLength(1);
+  });
+
+  it('never collides prayer-disable with the tornado slot', () => {
+    const boss = new Boss({ x: 4, y: 2 });
+    boss.currentStyle = 'magic';
+    boss.cycleCount = 1;
+
+    boss.initMagicPhase(() => 0.0);
+    expect(boss.prayerDisableSlot).toBe(1);
+
+    boss.initMagicPhase(() => 0.999999);
+    expect(boss.prayerDisableSlot).toBe(3);
   });
 
   it('attack counter resets after 4', () => {
     const boss = new Boss({ x: 4, y: 2 });
 
-    boss.fireAttack();
+    boss.fireAttack(5);
     expect(boss.attackCounter).toBe(1);
 
-    boss.fireAttack();
+    boss.fireAttack(10);
     expect(boss.attackCounter).toBe(2);
 
-    boss.fireAttack();
+    boss.fireAttack(15);
     expect(boss.attackCounter).toBe(3);
 
-    boss.fireAttack();
+    boss.fireAttack(20);
     // After 4th attack, counter resets to 0
     expect(boss.attackCounter).toBe(0);
   });
@@ -77,7 +101,7 @@ describe('Boss', () => {
   it('resets cooldown to attackSpeed after firing', () => {
     const boss = new Boss({ x: 4, y: 2 });
     boss.attackCooldown = 0;
-    boss.fireAttack();
+    boss.fireAttack(5);
     expect(boss.attackCooldown).toBe(5);
   });
 });

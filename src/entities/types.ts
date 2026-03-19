@@ -45,4 +45,5 @@ export interface Tornado {
   prevPos: Position;
   spawnTick: number;
   lifetime: number; // 20 ticks
+  activeTick?: number;
 }

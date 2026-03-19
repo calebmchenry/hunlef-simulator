@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { GameSimulation } from '../engine/GameSimulation.ts';
 import { Loadout } from '../equipment/Loadout.ts';
+import { STOMP_MAX_HIT } from '../equipment/items.ts';
 
 function createSim(seed = 42): GameSimulation {
   const loadout = new Loadout({ armorTier: 3, weaponType: 'staff', weaponTier: 3 });
@@ -133,6 +134,35 @@ describe('Integration', () => {
     sim.runTicks(10000);
     // Should have stopped before 10000 ticks
     expect(sim.tick).toBeLessThan(10000);
+  });
+
+  it('player under boss takes stomp only on boss attack cadence', () => {
+    const sim = createSim(42);
+    sim.player.attackTarget = null;
+    sim.player.targetTile = null;
+    sim.player.pos = { x: 6, y: 3 };
+    sim.player.prevPos = { ...sim.player.pos };
+    sim.player.hp = STOMP_MAX_HIT * 3;
+    sim.boss.attackCooldown = 1;
+    sim.rng.nextInt = ((_min: number, max: number) => max) as typeof sim.rng.nextInt;
+
+    const startHp = sim.player.hp;
+
+    sim.processTick();
+    expect(sim.player.hp).toBe(startHp - STOMP_MAX_HIT);
+    expect(sim.boss.attackCounter).toBe(0);
+
+    for (let i = 0; i < 4; i++) {
+      sim.processTick();
+    }
+
+    expect(sim.player.hp).toBe(startHp - STOMP_MAX_HIT);
+    expect(sim.boss.attackCounter).toBe(0);
+
+    sim.processTick();
+
+    expect(sim.player.hp).toBe(startHp - STOMP_MAX_HIT * 2);
+    expect(sim.boss.attackCounter).toBe(0);
   });
 });
 

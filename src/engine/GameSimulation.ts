@@ -23,12 +23,25 @@ import { FloorHazardManager } from '../world/FloorHazardManager.ts';
 import { createTornado, isTornadoExpired } from '../entities/Tornado.ts';
 
 export type GameState = 'countdown' | 'running' | 'won' | 'lost';
+export type BossEventType =
+  | 'attack_magic'
+  | 'attack_ranged'
+  | 'prayer_disable'
+  | 'tornado_stomp'
+  | 'stomp'
+  | 'style_switch';
 
 export interface GameSimulationOptions {
   skipCountdown?: boolean;
 }
 
 const TILE_SIZE = 48;
+const TORNADO_CORNER_TILES: Position[] = [
+  { x: 0, y: 0 },
+  { x: 11, y: 0 },
+  { x: 0, y: 11 },
+  { x: 11, y: 11 },
+];
 
 export class GameSimulation {
   player: Player;
@@ -38,6 +51,7 @@ export class GameSimulation {
   prayerManager: PrayerManager;
   floorHazardManager: FloorHazardManager;
   tornadoes: Tornado[] = [];
+  pendingTornadoSpawnTick: number = -1;
 
   tick: number = 0;
   state: GameState;
@@ -46,6 +60,9 @@ export class GameSimulation {
   hitSplats: HitSplat[] = [];
   projectiles: Projectile[] = [];
   lastBossAttackStyle: AttackStyle | null = null;
+  lastBossEventTick: number = -1;
+  lastBossEventType: BossEventType | null = null;
+  lastBossStyleSwitchStyle: AttackStyle | null = null;
 
   // Input queues
   private queuedMove: Position | null = null;
@@ -142,6 +159,9 @@ export class GameSimulation {
             tickCreated: this.tick,
           });
         }
+        if (proj.effect === 'disable_prayers') {
+          this.prayerManager.deactivate();
+        }
       } else {
         // Player projectile hits boss
         if (this.boss.hp <= 0) continue; // target already dead
@@ -182,6 +202,9 @@ export class GameSimulation {
     if (this.state === 'won' || this.state === 'lost') return;
 
     this.tick++;
+    this.lastBossEventTick = -1;
+    this.lastBossEventType = null;
+    this.lastBossStyleSwitchStyle = null;
 
     // 1. Process queued inputs (always, even during countdown)
     // Attack target queue
@@ -301,6 +324,11 @@ export class GameSimulation {
 
     // --- Running state: full combat ---
 
+    if (this.pendingTornadoSpawnTick === this.tick) {
+      this.spawnTornadoes();
+      this.pendingTornadoSpawnTick = -1;
+    }
+
     // 4a. Floor tile tick (advance tile states)
     this.floorHazardManager.tick(this.boss.hp, this.tick, this.rng);
 
@@ -329,29 +357,58 @@ export class GameSimulation {
     // 4c. Resolve arriving projectiles (damage arrives)
     this.resolveProjectiles();
 
+    const appliedStyleSwitch = this.boss.maybeApplyStyleSwitch(this.tick);
+    if (appliedStyleSwitch === 'magic') {
+      this.boss.initMagicPhase(() => this.rng.next());
+    }
+
     // 5. Boss AI: fire attack -> create projectile
     this.boss.attackCooldown--;
-    let bossAttackedThisTick = false;
     let bossAttackResult: BossAttackResult | null = null;
     if (this.boss.attackCooldown <= 0) {
-      bossAttackResult = this.boss.fireAttack();
-      bossAttackedThisTick = true;
-      if (bossAttackResult !== 'tornado') {
-        this.lastBossAttackStyle = bossAttackResult;
+      const playerUnderBoss = this.boss.occupies(this.player.pos.x, this.player.pos.y);
+      if (playerUnderBoss) {
+        const stompDmg = this.rng.nextInt(0, STOMP_MAX_HIT);
+        this.player.hp = Math.max(0, this.player.hp - stompDmg);
+        this.player.totalDamageTaken += stompDmg;
+        if (stompDmg > 0) {
+          this.hitSplats.push({
+            damage: stompDmg,
+            x: this.player.pos.x,
+            y: this.player.pos.y,
+            tickCreated: this.tick,
+          });
+        }
+        this.boss.attackCooldown = this.boss.attackSpeed;
+        this.setBossEvent('stomp');
+      } else {
+        bossAttackResult = this.boss.fireAttack(this.tick);
+
+        if (bossAttackResult === 'prayer_disable') {
+          this.lastBossAttackStyle = 'magic';
+          this.setBossEvent('prayer_disable');
+        } else if (bossAttackResult === 'tornado') {
+          this.pendingTornadoSpawnTick = this.tick + 1;
+          this.setBossEvent('tornado_stomp');
+        } else if (bossAttackResult !== null) {
+          this.lastBossAttackStyle = bossAttackResult;
+          this.setBossEvent(bossAttackResult === 'magic' ? 'attack_magic' : 'attack_ranged');
+        }
+
+        if (this.boss.pendingStyleSwitch !== null && this.boss.pendingStyleSwitch.triggerTick === this.tick + 2) {
+          this.setBossEvent('style_switch', this.boss.pendingStyleSwitch.nextStyle);
+        }
       }
     }
 
-    // Handle tornado spawn
-    if (bossAttackedThisTick && bossAttackResult === 'tornado') {
-      this.spawnTornadoes();
-    }
-
     const bossAttackStyle: AttackStyle | null =
-      (bossAttackedThisTick && bossAttackResult !== null && bossAttackResult !== 'tornado')
-        ? bossAttackResult as AttackStyle
-        : null;
+      bossAttackResult === 'ranged'
+        ? 'ranged'
+        : (bossAttackResult === 'magic' || bossAttackResult === 'prayer_disable')
+          ? 'magic'
+          : null;
 
-    if (bossAttackedThisTick && bossAttackStyle !== null) {
+    if (bossAttackStyle !== null) {
       const correctPrayer =
         (bossAttackStyle === 'magic' && this.prayerManager.activePrayer === 'magic') ||
         (bossAttackStyle === 'ranged' && this.prayerManager.activePrayer === 'missiles');
@@ -384,8 +441,13 @@ export class GameSimulation {
         arrivalTick: this.tick + delay,
         damage,
         blocked: false,
-        color: bossAttackStyle === 'ranged' ? '#44cc44' : '#aa44cc',
+        color: bossAttackStyle === 'ranged'
+          ? '#44cc44'
+          : bossAttackResult === 'prayer_disable'
+            ? '#6622aa'
+            : '#aa44cc',
         shape: bossAttackStyle === 'ranged' ? 'spike' : 'orb',
+        effect: bossAttackResult === 'prayer_disable' ? 'disable_prayers' : undefined,
       };
       this.projectiles.push(proj);
     }
@@ -500,6 +562,9 @@ export class GameSimulation {
     // 7a. Tornado movement (each tornado steps 1 tile toward player)
     for (const tornado of this.tornadoes) {
       tornado.prevPos = { ...tornado.pos };
+      if (tornado.activeTick !== undefined && this.tick < tornado.activeTick) {
+        continue;
+      }
       // Tornadoes can overlap boss, so use arena.isInBounds-only pathfinding
       // We pass the boss but tornadoes ignore boss collision in findNextStep
       // Actually per spec: "Tornadoes CAN overlap boss footprint"
@@ -513,6 +578,9 @@ export class GameSimulation {
       const tier = this.player.loadout.armor.tier;
       const dmgRange = TORNADO_DAMAGE[tier];
       for (const tornado of this.tornadoes) {
+        if (tornado.activeTick !== undefined && this.tick < tornado.activeTick) {
+          continue;
+        }
         if (tornado.pos.x === this.player.pos.x && tornado.pos.y === this.player.pos.y) {
           const tornadoDmg = this.rng.nextInt(dmgRange.min, dmgRange.max);
           this.player.hp = Math.max(0, this.player.hp - tornadoDmg);
@@ -531,21 +599,6 @@ export class GameSimulation {
 
     // 7c. Tornado cleanup (remove despawned tornadoes)
     this.tornadoes = this.tornadoes.filter(t => !isTornadoExpired(t, this.tick));
-
-    // 8. Stomp check
-    if (this.boss.occupies(this.player.pos.x, this.player.pos.y)) {
-      const stompDmg = this.rng.nextInt(0, STOMP_MAX_HIT);
-      this.player.hp = Math.max(0, this.player.hp - stompDmg);
-      this.player.totalDamageTaken += stompDmg;
-      if (stompDmg > 0) {
-        this.hitSplats.push({
-          damage: stompDmg,
-          x: this.player.pos.x,
-          y: this.player.pos.y,
-          tickCreated: this.tick,
-        });
-      }
-    }
 
     // 8. Death checks
     if (this.boss.hp <= 0) {
@@ -677,24 +730,18 @@ export class GameSimulation {
       default: count = 2;
     }
 
-    // Find walkable tiles within 2 tiles of boss footprint edge
-    const candidates: Position[] = [];
-    const boss = this.boss;
-    for (let x = boss.pos.x - 2; x <= boss.pos.x + boss.size + 1; x++) {
-      for (let y = boss.pos.y - 2; y <= boss.pos.y + boss.size + 1; y++) {
-        if (!this.arena.isInBounds(x, y)) continue;
-        if (boss.occupies(x, y)) continue;
-        candidates.push({ x, y });
-      }
-    }
-
-    if (candidates.length === 0) return;
-
     for (let i = 0; i < count; i++) {
-      const idx = this.rng.nextInt(0, candidates.length - 1);
-      const pos = candidates[idx];
-      this.tornadoes.push(createTornado(pos, this.tick));
+      const idx = this.rng.nextInt(0, TORNADO_CORNER_TILES.length - 1);
+      const tornado = createTornado(TORNADO_CORNER_TILES[idx], this.tick);
+      tornado.activeTick = this.tick + 1;
+      this.tornadoes.push(tornado);
     }
+  }
+
+  private setBossEvent(type: BossEventType, styleSwitchStyle: AttackStyle | null = null): void {
+    this.lastBossEventTick = this.tick;
+    this.lastBossEventType = type;
+    this.lastBossStyleSwitchStyle = styleSwitchStyle;
   }
 
   /**
