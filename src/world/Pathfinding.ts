@@ -8,19 +8,83 @@ interface Node {
   parent: Node | null;
 }
 
+// OSRS BFS exploration order (from wiki): W, E, S, N, SW, SE, NW, NE
+// Cardinal directions first, then diagonals. This means equal-length paths
+// prefer cardinal steps as a tiebreaker, while still finding shortest paths
+// that use diagonals when they're genuinely shorter.
 const DIRS = [
-  { dx: 0, dy: -1 },  // N
-  { dx: 0, dy: 1 },   // S
   { dx: -1, dy: 0 },  // W
   { dx: 1, dy: 0 },   // E
-  { dx: -1, dy: -1 }, // NW
-  { dx: 1, dy: -1 },  // NE
+  { dx: 0, dy: 1 },   // S
+  { dx: 0, dy: -1 },  // N
   { dx: -1, dy: 1 },  // SW
   { dx: 1, dy: 1 },   // SE
+  { dx: -1, dy: -1 }, // NW
+  { dx: 1, dy: -1 },  // NE
 ];
 
 /**
- * 8-directional BFS pathfinding on the arena grid.
+ * OSRS pathfinding step: cardinal directions first, then diagonal.
+ * Matches the BFS exploration order from the OSRS wiki:
+ * W, E, S, N, SW, SE, NW, NE — cardinal tiles are checked before diagonal.
+ * Returns the next position (1 tile toward target), or current pos if stuck.
+ */
+export function naiveStep(
+  from: Position,
+  to: Position,
+  arena: Arena,
+  boss: Boss,
+): Position {
+  if (from.x === to.x && from.y === to.y) return from;
+
+  const dx = Math.sign(to.x - from.x);
+  const dy = Math.sign(to.y - from.y);
+
+  // Try cardinal (horizontal) first
+  if (dx !== 0) {
+    const horiz = { x: from.x + dx, y: from.y };
+    if (arena.isWalkable(horiz.x, horiz.y, boss)) return horiz;
+  }
+
+  // Try cardinal (vertical)
+  if (dy !== 0) {
+    const vert = { x: from.x, y: from.y + dy };
+    if (arena.isWalkable(vert.x, vert.y, boss)) return vert;
+  }
+
+  // Try diagonal last
+  if (dx !== 0 && dy !== 0) {
+    const diag = { x: from.x + dx, y: from.y + dy };
+    if (canStep(from, diag, dx, dy, arena, boss)) return diag;
+  }
+
+  return from; // stuck
+}
+
+/** Check if a diagonal step is valid (target walkable + no corner cutting) */
+function canStep(
+  from: Position,
+  to: Position,
+  dx: number,
+  dy: number,
+  arena: Arena,
+  boss: Boss,
+): boolean {
+  if (!arena.isWalkable(to.x, to.y, boss)) return false;
+  // Prevent diagonal corner-cutting through blocked tiles
+  if (dx !== 0 && dy !== 0) {
+    if (!arena.isWalkable(from.x + dx, from.y, boss) ||
+        !arena.isWalkable(from.x, from.y + dy, boss)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * 8-directional BFS pathfinding with OSRS direction order (W,E,S,N,SW,SE,NW,NE).
+ * Cardinal directions are explored first, so equal-length paths prefer cardinal
+ * steps — but diagonals are still used when they produce a genuinely shorter path.
  * Returns the next position to move to (1 tile toward target), or current pos if no path.
  */
 export function findNextStep(
@@ -31,12 +95,7 @@ export function findNextStep(
 ): Position {
   if (from.x === to.x && from.y === to.y) return from;
 
-  // If target is inside boss, find nearest walkable tile to target
-  let target = to;
-  if (boss.occupies(to.x, to.y)) {
-    target = findNearestWalkable(to, arena, boss);
-  }
-
+  const target = to;
   const visited = new Set<string>();
   const queue: Node[] = [];
   const startKey = `${from.x},${from.y}`;
@@ -81,20 +140,3 @@ export function findNextStep(
   return from;
 }
 
-function findNearestWalkable(target: Position, arena: Arena, boss: Boss): Position {
-  let best = target;
-  let bestDist = Infinity;
-
-  for (let x = 0; x < arena.width; x++) {
-    for (let y = 0; y < arena.height; y++) {
-      if (!arena.isWalkable(x, y, boss)) continue;
-      const dist = Math.max(Math.abs(x - target.x), Math.abs(y - target.y));
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = { x, y };
-      }
-    }
-  }
-
-  return best;
-}

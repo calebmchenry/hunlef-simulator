@@ -23,6 +23,7 @@ const BODY_EXPORTS = [
     sequences: [
       ["idle", 808],
       ["eat", 829],
+      ["run", 824],
     ],
   },
   {
@@ -30,6 +31,7 @@ const BODY_EXPORTS = [
     sequences: [
       ["idle", 808],
       ["eat", 829],
+      ["run", 824],
       ["attack", 426],
     ],
   },
@@ -38,6 +40,7 @@ const BODY_EXPORTS = [
     sequences: [
       ["idle", 808],
       ["eat", 829],
+      ["run", 824],
       ["attack", 419],
     ],
   },
@@ -46,14 +49,39 @@ const BODY_EXPORTS = [
     sequences: [
       ["idle", 808],
       ["eat", 829],
+      ["run", 824],
       ["attack", 440],
     ],
   },
 ];
 
+const HELM_MODEL_ID = 38025;
+const LEGS_MODEL_ID = 38078;
+
+// Helm and legs share the same animation sequences as the body (idle/eat/run)
+// so they animate in sync. No attack clip since it varies by weapon.
+const ANIMATED_OVERLAYS = [
+  {
+    name: "player_helm",
+    modelId: HELM_MODEL_ID,
+    sequences: [
+      ["idle", 808],
+      ["eat", 829],
+      ["run", 824],
+    ],
+  },
+  {
+    name: "player_legs",
+    modelId: LEGS_MODEL_ID,
+    sequences: [
+      ["idle", 808],
+      ["eat", 829],
+      ["run", 824],
+    ],
+  },
+];
+
 const STATIC_MODELS = {
-  player_helm: 38025,
-  player_legs: 38078,
   player_bow: 38302,
   player_staff: 38312,
   player_halberd: 38303,
@@ -80,19 +108,19 @@ function applyAnimationNames(gltfJsonText, clipNames) {
   }
 }
 
-async function exportAnimatedBody(cache, name, sequenceEntries) {
-  console.log(`=== Exporting Animated Player Body: ${name} ===`);
-  console.log(`Model ID: ${BODY_MODEL_ID}`);
+async function exportAnimatedModel(cache, name, modelId, sequenceEntries) {
+  console.log(`=== Exporting Animated Model: ${name} ===`);
+  console.log(`Model ID: ${modelId}`);
 
   try {
-    const modelFiles = await cache.getAllFiles(IndexType.MODELS, BODY_MODEL_ID);
+    const modelFiles = await cache.getAllFiles(IndexType.MODELS, modelId);
     if (!modelFiles || modelFiles.length === 0) {
-      throw new Error("Player body model not found in cache");
+      throw new Error(`Model ${modelId} not found in cache`);
     }
 
     const modelDef = modelFiles[0].def;
     if (!modelDef) {
-      throw new Error("Player body model has no definition");
+      throw new Error(`Model ${modelId} has no definition`);
     }
 
     console.log(
@@ -193,8 +221,14 @@ async function main() {
   const bodyResults = [];
   for (const bodyExport of BODY_EXPORTS) {
     bodyResults.push(
-      await exportAnimatedBody(cache, bodyExport.name, bodyExport.sequences)
+      await exportAnimatedModel(cache, bodyExport.name, BODY_MODEL_ID, bodyExport.sequences)
     );
+    console.log("");
+  }
+
+  console.log("=== Exporting Animated Overlays (Helm/Legs) ===");
+  for (const overlay of ANIMATED_OVERLAYS) {
+    await exportAnimatedModel(cache, overlay.name, overlay.modelId, overlay.sequences);
     console.log("");
   }
 

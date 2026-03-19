@@ -31,7 +31,8 @@ const PLAYER_BODY_MODELS = new Set([
   "player_body_staff.gltf",
   "player_body_halberd.gltf",
 ]);
-const PLAYER_BODY_CLIPS = ["idle", "attack", "eat"];
+const PLAYER_BODY_CLIPS = ["idle", "eat", "run", "attack"];
+// player_body.gltf (base body without weapon attack) is not validated strictly
 
 const COMPONENT_COUNT = {
   SCALAR: 1,
@@ -186,7 +187,8 @@ function expectedAnimationsForFile(fileName) {
     return {
       count: BOSS_CLIPS.length,
       names: BOSS_CLIPS,
-      requiresMorphValidation: true,
+      requiresMorphValidation: false,
+      mode: "boss",
     };
   }
 
@@ -195,6 +197,7 @@ function expectedAnimationsForFile(fileName) {
       count: PLAYER_BODY_CLIPS.length,
       names: PLAYER_BODY_CLIPS,
       requiresMorphValidation: true,
+      mode: "player",
     };
   }
 
@@ -202,7 +205,156 @@ function expectedAnimationsForFile(fileName) {
     count: 0,
     names: [],
     requiresMorphValidation: false,
+    mode: "static",
   };
+}
+
+function validateBossSkeletal(gltf, buffers, morphStats, errors) {
+  if (morphStats.morphAccessorCount > 0) {
+    errors.push("Boss model should not contain morph targets");
+  }
+
+  const skins = gltf.skins ?? [];
+  if (skins.length < 1) {
+    errors.push("Boss model must contain at least one skin");
+  }
+
+  for (let skinIndex = 0; skinIndex < skins.length; skinIndex++) {
+    const skin = skins[skinIndex];
+    const joints = skin.joints ?? [];
+    if (!Array.isArray(joints) || joints.length === 0) {
+      errors.push(`skin[${skinIndex}] has no joints`);
+      continue;
+    }
+
+    if (skin.inverseBindMatrices === undefined) {
+      errors.push(`skin[${skinIndex}] is missing inverseBindMatrices accessor`);
+      continue;
+    }
+
+    const { accessor } = readAccessorValues(gltf, buffers, skin.inverseBindMatrices);
+    if (accessor.type !== "MAT4" || accessor.componentType !== FLOAT32_COMPONENT_TYPE) {
+      errors.push(`skin[${skinIndex}] inverseBindMatrices accessor must be float32 MAT4`);
+    }
+    if (accessor.count !== joints.length) {
+      errors.push(
+        `skin[${skinIndex}] joints count (${joints.length}) does not match inverseBindMatrices count (${accessor.count})`
+      );
+    }
+  }
+
+  const meshes = gltf.meshes ?? [];
+  for (let meshIndex = 0; meshIndex < meshes.length; meshIndex++) {
+    const mesh = meshes[meshIndex];
+    const primitives = mesh.primitives ?? [];
+    for (let primIndex = 0; primIndex < primitives.length; primIndex++) {
+      const primitive = primitives[primIndex];
+      const attrs = primitive.attributes ?? {};
+
+      if (attrs.POSITION === undefined) {
+        errors.push(`mesh[${meshIndex}].primitives[${primIndex}] missing POSITION accessor`);
+        continue;
+      }
+      if (attrs.JOINTS_0 === undefined) {
+        errors.push(`mesh[${meshIndex}].primitives[${primIndex}] missing JOINTS_0 accessor`);
+        continue;
+      }
+      if (attrs.WEIGHTS_0 === undefined) {
+        errors.push(`mesh[${meshIndex}].primitives[${primIndex}] missing WEIGHTS_0 accessor`);
+        continue;
+      }
+
+      const positionAccessor = gltf.accessors?.[attrs.POSITION];
+      if (!positionAccessor) {
+        errors.push(`mesh[${meshIndex}].primitives[${primIndex}] POSITION accessor not found`);
+        continue;
+      }
+
+      const jointsData = readAccessorValues(gltf, buffers, attrs.JOINTS_0);
+      const weightsData = readAccessorValues(gltf, buffers, attrs.WEIGHTS_0);
+
+      if (jointsData.accessor.type !== "VEC4") {
+        errors.push(`mesh[${meshIndex}].primitives[${primIndex}] JOINTS_0 accessor must be VEC4`);
+      }
+      if (
+        jointsData.accessor.componentType !== 5121 &&
+        jointsData.accessor.componentType !== 5123
+      ) {
+        errors.push(
+          `mesh[${meshIndex}].primitives[${primIndex}] JOINTS_0 accessor must use UNSIGNED_BYTE or UNSIGNED_SHORT`
+        );
+      }
+
+      if (weightsData.accessor.type !== "VEC4") {
+        errors.push(`mesh[${meshIndex}].primitives[${primIndex}] WEIGHTS_0 accessor must be VEC4`);
+      }
+      if (weightsData.accessor.componentType !== FLOAT32_COMPONENT_TYPE) {
+        errors.push(`mesh[${meshIndex}].primitives[${primIndex}] WEIGHTS_0 accessor must be float32`);
+      }
+
+      const vertexCount = positionAccessor.count ?? 0;
+      if (jointsData.accessor.count !== vertexCount || weightsData.accessor.count !== vertexCount) {
+        errors.push(
+          `mesh[${meshIndex}].primitives[${primIndex}] JOINTS_0/WEIGHTS_0 counts must match POSITION count`
+        );
+      }
+
+      const weights = weightsData.values;
+      for (let v = 0; v < weightsData.accessor.count; v++) {
+        const base = v * 4;
+        const w0 = weights[base + 0];
+        const w1 = weights[base + 1];
+        const w2 = weights[base + 2];
+        const w3 = weights[base + 3];
+
+        if (![w0, w1, w2, w3].every(Number.isFinite)) {
+          errors.push(`mesh[${meshIndex}].primitives[${primIndex}] has non-finite WEIGHTS_0 at vertex ${v}`);
+          break;
+        }
+
+        if (w0 < 0 || w1 < 0 || w2 < 0 || w3 < 0 || w0 > 1 || w1 > 1 || w2 > 1 || w3 > 1) {
+          errors.push(`mesh[${meshIndex}].primitives[${primIndex}] WEIGHTS_0 out of [0,1] at vertex ${v}`);
+          break;
+        }
+
+        const sum = w0 + w1 + w2 + w3;
+        if (Math.abs(sum - 1) > 1e-3) {
+          errors.push(
+            `mesh[${meshIndex}].primitives[${primIndex}] WEIGHTS_0 must sum to 1.0 (vertex ${v} sum=${sum})`
+          );
+          break;
+        }
+      }
+    }
+  }
+
+  const animations = gltf.animations ?? [];
+  for (let animIndex = 0; animIndex < animations.length; animIndex++) {
+    const animation = animations[animIndex];
+    const channels = animation.channels ?? [];
+    const paths = new Set();
+
+    for (const channel of channels) {
+      const path = channel.target?.path;
+      if (path === "weights") {
+        errors.push(`Animation[${animIndex}] should not target weights for boss skeletal model`);
+        continue;
+      }
+
+      if (path !== "translation" && path !== "rotation" && path !== "scale") {
+        errors.push(`Animation[${animIndex}] has unsupported channel target path "${path}"`);
+        continue;
+      }
+
+      paths.add(path);
+    }
+
+    for (const requiredPath of ["translation", "rotation", "scale"]) {
+      if (!paths.has(requiredPath)) {
+        errors.push(`Animation[${animIndex}] is missing "${requiredPath}" channels`);
+      }
+    }
+  }
 }
 
 function validateMorphTargets(gltf, buffers, requiresMorphValidation, errors) {
@@ -354,6 +506,9 @@ function validateFile(filePath) {
   const morphStats = validateMorphTargets(gltf, buffers, expected.requiresMorphValidation, errors);
   validateAnimationContracts(fileName, gltf, expected, errors);
   validateAnimationSamplers(gltf, buffers, errors);
+  if (expected.mode === "boss") {
+    validateBossSkeletal(gltf, buffers, morphStats, errors);
+  }
 
   if (errors.length > 0) {
     console.log(`FAIL ${fileName}`);

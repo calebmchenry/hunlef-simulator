@@ -32,7 +32,8 @@ const PLAYER_MODEL_SCALE = 1 / 200;
 const TORNADO_MODEL_SCALE = 1 / 674; // tornado model is 674 OSRS units wide, target ~1 tile
 const BOSS_MODEL_YAW_OFFSET = 0; // atan2(dx,dz) already faces +Z toward player
 const PLAYER_MODEL_YAW_OFFSET = 0; // same correction for player model
-const PLAYER_OVERHEAD_Y = 1.1;
+const PLAYER_OVERHEAD_Y = 1.8;
+const OVERHEAD_SCREEN_SIZE = 0.025; // fraction of view height
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
@@ -73,19 +74,6 @@ interface MorphRetargetCandidate {
 }
 
 const MORPH_RETARGET_MARKER = '__cgMorphRetargeted';
-const ATTACK_MORPH_SCALE_MARKER = '__cgAttackMorphsScaled';
-const ATTACK_MORPH_SCALE = 0.35;
-const MORPH_TRACK_EPSILON = 1e-6;
-const BOSS_ATTACK_CLIP_NAMES = new Set([
-  'attack_magic',
-  'magic_attack',
-  'attack_ranged',
-  'ranged_attack',
-  '8430',
-  '8431',
-  'seq_8430',
-  'seq_8431',
-]);
 
 function parseMorphTrackBinding(trackName: string): MorphTrackBinding | null {
   const indexedMatch = trackName.match(/^(.+)(\.morphTargetInfluences\[(\d+)\])$/);
@@ -286,142 +274,6 @@ function retargetMorphAnimations(root: THREE.Object3D, clips: THREE.AnimationCli
   }
 }
 
-function formatMorphIndexSummary(indices: Iterable<number>): string {
-  const sorted = [...new Set(indices)].sort((a, b) => a - b);
-  if (sorted.length === 0) return '[]';
-
-  const ranges: string[] = [];
-  let rangeStart = sorted[0];
-  let rangeEnd = sorted[0];
-
-  for (let i = 1; i < sorted.length; i++) {
-    const index = sorted[i];
-    if (index === rangeEnd + 1) {
-      rangeEnd = index;
-      continue;
-    }
-
-    ranges.push(rangeStart === rangeEnd ? `${rangeStart}` : `${rangeStart}-${rangeEnd}`);
-    rangeStart = index;
-    rangeEnd = index;
-  }
-
-  ranges.push(rangeStart === rangeEnd ? `${rangeStart}` : `${rangeStart}-${rangeEnd}`);
-  return `[${ranges.join(', ')}]`;
-}
-
-function getClipMorphIndices(clips: THREE.AnimationClip[]): Map<string, Set<number>> {
-  const clipMorphIndices = new Map<string, Set<number>>();
-
-  for (const clip of clips) {
-    const morphIndices = new Set<number>();
-
-    for (const track of clip.tracks) {
-      const binding = parseMorphTrackBinding(track.name);
-      if (!binding) continue;
-
-      if (binding.morphIndex !== null) {
-        morphIndices.add(binding.morphIndex);
-        continue;
-      }
-
-      const valueSize = track.getValueSize();
-      if (valueSize <= 0) continue;
-
-      const values = (track as { values?: ArrayLike<number> }).values;
-      if (!values || values.length === 0) continue;
-
-      for (let offset = 0; offset < values.length; offset += valueSize) {
-        for (let index = 0; index < valueSize && offset + index < values.length; index++) {
-          if (Math.abs(values[offset + index]) > MORPH_TRACK_EPSILON) {
-            morphIndices.add(index);
-          }
-        }
-      }
-    }
-
-    clipMorphIndices.set(clip.name, morphIndices);
-    console.log(
-      `[Renderer3D] getClipMorphIndices: clip "${clip.name}" uses ${morphIndices.size} ` +
-      `morph target(s) ${formatMorphIndexSummary(morphIndices)}`,
-    );
-  }
-
-  return clipMorphIndices;
-}
-
-function scaleBossAttackMorphDeltas(model: THREE.Object3D, clips: THREE.AnimationClip[]): void {
-  const clipMorphIndices = getClipMorphIndices(clips);
-  const attackClipNames = [...clipMorphIndices.keys()].filter((clipName) => BOSS_ATTACK_CLIP_NAMES.has(clipName));
-
-  if (attackClipNames.length === 0) {
-    console.log('[Renderer3D] scaleBossAttackMorphDeltas: no attack clips found');
-    return;
-  }
-
-  const attackMorphIndices = new Set<number>();
-  for (const clipName of attackClipNames) {
-    const clipIndices = clipMorphIndices.get(clipName);
-    if (!clipIndices) continue;
-    for (const morphIndex of clipIndices) {
-      attackMorphIndices.add(morphIndex);
-    }
-  }
-
-  if (attackMorphIndices.size === 0) {
-    console.log(
-      `[Renderer3D] scaleBossAttackMorphDeltas: attack clips ${attackClipNames.join(', ')} ` +
-      'did not resolve to any morph targets',
-    );
-    return;
-  }
-
-  let meshesProcessed = 0;
-  let geometriesScaled = 0;
-  let morphTargetsScaled = 0;
-
-  model.traverse((object) => {
-    const mesh = object as THREE.Mesh;
-    if (mesh.isMesh !== true) return;
-
-    const geometry = mesh.geometry as THREE.BufferGeometry;
-    const morphPositions = geometry.morphAttributes.position;
-    if (!Array.isArray(morphPositions) || morphPositions.length === 0) return;
-
-    meshesProcessed++;
-
-    if (geometry.userData[ATTACK_MORPH_SCALE_MARKER] === true) {
-      return;
-    }
-
-    let scaledOnGeometry = 0;
-    for (const morphIndex of attackMorphIndices) {
-      if (morphIndex >= morphPositions.length) continue;
-
-      const attribute = morphPositions[morphIndex] as THREE.BufferAttribute;
-      const values = attribute.array as ArrayLike<number> & { [index: number]: number; length: number };
-      for (let i = 0; i < values.length; i++) {
-        values[i] *= ATTACK_MORPH_SCALE;
-      }
-      attribute.needsUpdate = true;
-      scaledOnGeometry++;
-    }
-
-    if (scaledOnGeometry === 0) return;
-
-    geometry.userData[ATTACK_MORPH_SCALE_MARKER] = true;
-    geometriesScaled++;
-    morphTargetsScaled += scaledOnGeometry;
-  });
-
-  console.log(
-    `[Renderer3D] scaleBossAttackMorphDeltas: clips ${attackClipNames.join(', ')} ` +
-    `-> ${attackMorphIndices.size} morph target(s) ${formatMorphIndexSummary(attackMorphIndices)}; ` +
-    `processed ${meshesProcessed} mesh(es), scaled ${morphTargetsScaled} morph target(s) ` +
-    `across ${geometriesScaled} geometries at ${ATTACK_MORPH_SCALE}x`,
-  );
-}
-
 export class Renderer3D {
   private webglRenderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
@@ -443,8 +295,10 @@ export class Renderer3D {
   private playerAnimController: PlayerAnimationController | null = null;
   private playerBodyVariants: Map<WeaponType, PlayerGLTFAsset> = new Map();
   private playerWeaponModels: Map<WeaponType, THREE.Object3D> = new Map();
-  private playerHelmModel: THREE.Object3D | null = null;
-  private playerLegsModel: THREE.Object3D | null = null;
+  private playerHelmAsset: { scene: THREE.Object3D; animations: THREE.AnimationClip[] } | null = null;
+  private playerLegsAsset: { scene: THREE.Object3D; animations: THREE.AnimationClip[] } | null = null;
+  private playerHelmAnimController: PlayerAnimationController | null = null;
+  private playerLegsAnimController: PlayerAnimationController | null = null;
   private currentPlayerWeapon: WeaponType | null = null;
   private playerAssetsLoaded: boolean = false;
   private playerAssetsFailed: boolean = false;
@@ -797,9 +651,7 @@ export class Renderer3D {
         // GLTF loaded successfully
         const model = gltf.scene;
         model.scale.set(BOSS_MODEL_SCALE, BOSS_MODEL_SCALE, BOSS_MODEL_SCALE);
-        retargetMorphAnimations(model, gltf.animations);
-        scaleBossAttackMorphDeltas(model, gltf.animations);
-        this.applyUnlitMaterials(gltf.scene, true);
+        this.applyUnlitMaterials(model, true);
 
         this.bossGroup.add(model);
 
@@ -900,6 +752,8 @@ export class Renderer3D {
       retargetMorphAnimations(bodyBow.scene, bodyBow.animations);
       retargetMorphAnimations(bodyStaff.scene, bodyStaff.animations);
       retargetMorphAnimations(bodyHalberd.scene, bodyHalberd.animations);
+      retargetMorphAnimations(helm.scene, helm.animations);
+      retargetMorphAnimations(legs.scene, legs.animations);
 
       this.applyUnlitMaterials(bodyBow.scene);
       this.applyUnlitMaterials(bodyStaff.scene);
@@ -914,8 +768,8 @@ export class Renderer3D {
       this.playerBodyVariants.set('staff', { scene: bodyStaff.scene, animations: bodyStaff.animations });
       this.playerBodyVariants.set('halberd', { scene: bodyHalberd.scene, animations: bodyHalberd.animations });
 
-      this.playerHelmModel = helm.scene;
-      this.playerLegsModel = legs.scene;
+      this.playerHelmAsset = { scene: helm.scene, animations: helm.animations };
+      this.playerLegsAsset = { scene: legs.scene, animations: legs.animations };
       this.playerWeaponModels.set('bow', bow.scene);
       this.playerWeaponModels.set('staff', staff.scene);
       this.playerWeaponModels.set('halberd', halberd.scene);
@@ -949,6 +803,10 @@ export class Renderer3D {
   private clearPlayerGroup(): void {
     this.playerAnimController?.dispose();
     this.playerAnimController = null;
+    this.playerHelmAnimController?.dispose();
+    this.playerHelmAnimController = null;
+    this.playerLegsAnimController?.dispose();
+    this.playerLegsAnimController = null;
     this.playerGroup.clear();
   }
 
@@ -968,15 +826,15 @@ export class Renderer3D {
 
     const bodyAsset = this.playerBodyVariants.get(weaponType);
     const weaponModel = this.playerWeaponModels.get(weaponType);
-    if (!bodyAsset || !weaponModel || !this.playerHelmModel || !this.playerLegsModel) {
+    if (!bodyAsset || !weaponModel || !this.playerHelmAsset || !this.playerLegsAsset) {
       console.warn(`[Renderer3D] Missing player GLTF asset(s) for ${weaponType}, using cyan box fallback`);
       this.showPlayerFallback();
       return;
     }
 
     const body = this.scalePlayerPart(cloneSkinnedObject(bodyAsset.scene));
-    const helm = this.scalePlayerPart(this.playerHelmModel.clone(true));
-    const legs = this.scalePlayerPart(this.playerLegsModel.clone(true));
+    const helm = this.scalePlayerPart(cloneSkinnedObject(this.playerHelmAsset.scene));
+    const legs = this.scalePlayerPart(cloneSkinnedObject(this.playerLegsAsset.scene));
     const weapon = this.scalePlayerPart(weaponModel.clone(true));
 
     this.clearPlayerGroup();
@@ -985,6 +843,8 @@ export class Renderer3D {
     this.playerGroup.add(legs);
     this.playerGroup.add(weapon);
     this.playerAnimController = new PlayerAnimationController(body, bodyAsset.animations);
+    this.playerHelmAnimController = new PlayerAnimationController(helm, this.playerHelmAsset.animations);
+    this.playerLegsAnimController = new PlayerAnimationController(legs, this.playerLegsAsset.animations);
   }
 
   private createOverheadSprite(): THREE.Sprite {
@@ -1046,6 +906,8 @@ export class Renderer3D {
     const playerWorld = this.updatePlayer(sim, tickProgress);
     this.updatePlayerAnimations(sim);
     this.playerAnimController?.update(dt);
+    this.playerHelmAnimController?.update(dt);
+    this.playerLegsAnimController?.update(dt);
     if (sim.state === 'countdown') {
       const pw = tileToWorld(sim.player.pos.x, sim.player.pos.y);
       this.cameraController.snapTarget(pw.x, 0, pw.z);
@@ -1157,15 +1019,60 @@ export class Renderer3D {
 
     const prevWorld = tileToWorld(player.prevPos.x, player.prevPos.y);
     const currWorld = tileToWorld(player.pos.x, player.pos.y);
-    const worldX = lerp(prevWorld.x, currWorld.x, tickProgress);
-    const worldZ = lerp(prevWorld.z, currWorld.z, tickProgress);
 
-    this.playerGroup.position.set(worldX, 0, worldZ);
+    // 3-point interpolation when running through an intermediate tile
+    let worldX: number;
+    let worldZ: number;
+    let segFromX: number;
+    let segFromZ: number;
+    let segToX: number;
+    let segToZ: number;
 
-    const dx = this.bossGroup.position.x - worldX;
-    const dz = this.bossGroup.position.z - worldZ;
-    if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
-      this.playerGroup.rotation.y = Math.atan2(dx, dz) + PLAYER_MODEL_YAW_OFFSET;
+    if (player.midPos) {
+      const midWorld = tileToWorld(player.midPos.x, player.midPos.y);
+      if (tickProgress < 0.5) {
+        const t = tickProgress * 2; // 0→1 over first half
+        worldX = lerp(prevWorld.x, midWorld.x, t);
+        worldZ = lerp(prevWorld.z, midWorld.z, t);
+        segFromX = prevWorld.x; segFromZ = prevWorld.z;
+        segToX = midWorld.x; segToZ = midWorld.z;
+      } else {
+        const t = (tickProgress - 0.5) * 2; // 0→1 over second half
+        worldX = lerp(midWorld.x, currWorld.x, t);
+        worldZ = lerp(midWorld.z, currWorld.z, t);
+        segFromX = midWorld.x; segFromZ = midWorld.z;
+        segToX = currWorld.x; segToZ = currWorld.z;
+      }
+    } else {
+      worldX = lerp(prevWorld.x, currWorld.x, tickProgress);
+      worldZ = lerp(prevWorld.z, currWorld.z, tickProgress);
+      segFromX = prevWorld.x; segFromZ = prevWorld.z;
+      segToX = currWorld.x; segToZ = currWorld.z;
+    }
+
+    const isMoving = player.prevPos.x !== player.pos.x || player.prevPos.y !== player.pos.y;
+    if (isMoving) {
+      // Face current movement segment direction
+      const moveDx = segToX - segFromX;
+      const moveDz = segToZ - segFromZ;
+      if (Math.abs(moveDx) > 0.001 || Math.abs(moveDz) > 0.001) {
+        this.playerGroup.rotation.y = Math.atan2(moveDx, moveDz) + PLAYER_MODEL_YAW_OFFSET;
+      }
+      // Subtle procedural bob while running
+      const bobPhase = tickProgress * Math.PI * (player.midPos ? 2 : 1);
+      this.playerGroup.position.set(worldX, Math.sin(bobPhase) * 0.03, worldZ);
+      this.playerGroup.rotation.x = 0.05;
+    } else {
+      // Face boss only when actively attacking — otherwise keep current facing
+      if (player.attackTarget === 'boss') {
+        const dx = this.bossGroup.position.x - worldX;
+        const dz = this.bossGroup.position.z - worldZ;
+        if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
+          this.playerGroup.rotation.y = Math.atan2(dx, dz) + PLAYER_MODEL_YAW_OFFSET;
+        }
+      }
+      this.playerGroup.position.set(worldX, 0, worldZ);
+      this.playerGroup.rotation.x = 0;
     }
 
     return { x: worldX, z: worldZ };
@@ -1174,15 +1081,33 @@ export class Renderer3D {
   private updatePlayerAnimations(sim: GameSimulation): void {
     if (!this.playerAnimController) return;
 
+    // Helper to sync all player part controllers to the same state
+    const playAll = (method: 'playIdle' | 'playRun' | 'playEat' | 'playAttack') => {
+      this.playerAnimController?.[method]();
+      // Helm/legs don't have attack clips — fall back to idle for attack
+      const overlayMethod = method === 'playAttack' ? 'playIdle' : method;
+      this.playerHelmAnimController?.[overlayMethod]();
+      this.playerLegsAnimController?.[overlayMethod]();
+    };
+
     if (sim.playerAteThisTick && sim.tick !== this.lastPlayerEatTick) {
       this.lastPlayerEatTick = sim.tick;
-      this.playerAnimController.playEat();
+      playAll('playEat');
       return;
     }
 
     if (sim.tick !== this.lastPlayerAttackTick && this.didPlayerAttackThisTick(sim)) {
       this.lastPlayerAttackTick = sim.tick;
-      this.playerAnimController.playAttack();
+      playAll('playAttack');
+      return;
+    }
+
+    const isMoving = sim.player.prevPos.x !== sim.player.pos.x
+      || sim.player.prevPos.y !== sim.player.pos.y;
+    if (isMoving) {
+      playAll('playRun');
+    } else {
+      playAll('playIdle');
     }
   }
 
@@ -1275,6 +1200,11 @@ export class Renderer3D {
   }
 
   private updateOverheads(sim: GameSimulation): void {
+    // Compute a fixed screen-size scale so overheads don't change size with zoom.
+    // Use camera distance to the scene center as a proxy for zoom level.
+    const camDist = this.camera.position.length();
+    const fixedScale = camDist * OVERHEAD_SCREEN_SIZE;
+
     // Player overhead
     const activePrayer = sim.prayerManager.activePrayer;
     if (activePrayer) {
@@ -1285,6 +1215,7 @@ export class Renderer3D {
         this.playerOverheadSprite.visible = true;
         const pp = this.playerGroup.position;
         this.playerOverheadSprite.position.set(pp.x, pp.y + PLAYER_OVERHEAD_Y, pp.z);
+        this.playerOverheadSprite.scale.set(fixedScale, fixedScale, 1);
       }
     } else {
       this.playerOverheadSprite.visible = false;
@@ -1299,8 +1230,8 @@ export class Renderer3D {
         (this.bossOverheadSprite.material as THREE.SpriteMaterial).map = tex;
         this.bossOverheadSprite.visible = true;
         const bp = this.bossGroup.position;
-        // Boss model height: Y range ~0 to ~450 OSRS units * scale = ~3.3 world units
         this.bossOverheadSprite.position.set(bp.x, 3.8, bp.z);
+        this.bossOverheadSprite.scale.set(fixedScale, fixedScale, 1);
       }
     } else {
       this.bossOverheadSprite.visible = false;
@@ -1559,6 +1490,8 @@ export class Renderer3D {
   /** Clean up Three.js resources */
   dispose(): void {
     this.playerAnimController?.dispose();
+    this.playerHelmAnimController?.dispose();
+    this.playerLegsAnimController?.dispose();
     this.disposeTileOutline(this.playerTrueTile);
     this.disposeTileOutline(this.bossTrueTile);
     for (const tile of [...this.activeTornadoTrueTiles, ...this.tornadoTrueTilePool]) {

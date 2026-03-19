@@ -1,24 +1,27 @@
 import * as THREE from 'three';
 
-export type PlayerAnimState = 'idle' | 'attack' | 'eat';
+export type PlayerAnimState = 'idle' | 'attack' | 'eat' | 'run';
 
 const ANIM_NAME_MAP: Record<string, PlayerAnimState> = {
   idle: 'idle',
   eat: 'eat',
+  run: 'run',
   attack: 'attack',
   '808': 'idle',
   '829': 'eat',
+  '824': 'run',
   '419': 'attack',
   '426': 'attack',
   '440': 'attack',
   seq_808: 'idle',
   seq_829: 'eat',
+  seq_824: 'run',
   seq_419: 'attack',
   seq_426: 'attack',
   seq_440: 'attack',
 };
 
-const EXPECTED_CLIP_ORDER: PlayerAnimState[] = ['idle', 'eat', 'attack'];
+const EXPECTED_CLIP_ORDER: PlayerAnimState[] = ['idle', 'eat', 'run', 'attack'];
 
 export class PlayerAnimationController {
   private readonly root: THREE.Object3D;
@@ -51,7 +54,7 @@ export class PlayerAnimationController {
       if (!state) continue;
 
       const action = this.mixer.clipAction(clip);
-      if (state === 'idle') {
+      if (state === 'idle' || state === 'run') {
         action.setLoop(THREE.LoopRepeat, Infinity);
       } else {
         action.setLoop(THREE.LoopOnce, 1);
@@ -61,7 +64,15 @@ export class PlayerAnimationController {
     }
 
     this.mixer.addEventListener('finished', this.handleFinished);
-    this.playIdle();
+
+    // Start idle animation directly — bypass crossFadeTo's same-state guard
+    // since currentState is already 'idle' at construction time.
+    const idleAction = this.actions.get('idle');
+    if (idleAction) {
+      idleAction.reset();
+      idleAction.play();
+      this.mixer.update(0);
+    }
   }
 
   playIdle(): void {
@@ -70,6 +81,10 @@ export class PlayerAnimationController {
 
   playAttack(): void {
     this.crossFadeTo('attack');
+  }
+
+  playRun(): void {
+    this.crossFadeTo('run');
   }
 
   playEat(): void {

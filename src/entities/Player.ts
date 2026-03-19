@@ -5,6 +5,7 @@ import { Inventory } from './Inventory.ts';
 export class Player {
   pos: Position;
   prevPos: Position;
+  midPos: Position | null = null;
   hp: number = 99;
   maxHp: number = 99;
   prayerPoints: number = 77;
@@ -39,6 +40,7 @@ export class Player {
   reset(startPos: Position): void {
     this.pos = { ...startPos };
     this.prevPos = { ...startPos };
+    this.midPos = null;
     this.hp = 99;
     this.prayerPoints = 77;
     this.attackCooldown = 0;

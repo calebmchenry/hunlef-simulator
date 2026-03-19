@@ -11,6 +11,7 @@ import type { FKeyConfig } from '../input/KeyBindManager.ts';
 import { DEFAULT_FKEY_CONFIG } from '../input/KeyBindManager.ts';
 
 const FKEY_OPTIONS = ['Escape', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'];
+const STORAGE_KEY = 'cg-sim-loadout';
 const WEAPON_TYPE_OPTIONS: Array<{ value: WeaponType; label: string }> = [
   { value: 'staff', label: 'Staff' },
   { value: 'bow', label: 'Bow' },
@@ -42,9 +43,9 @@ export class LoadoutScreen {
         <label>Armor Tier</label>
         <select id="armor-tier">
           <option value="0">${ARMOR_SETS[0].name}</option>
-          <option value="1">${ARMOR_SETS[1].name}</option>
+          <option value="1" selected>${ARMOR_SETS[1].name}</option>
           <option value="2">${ARMOR_SETS[2].name}</option>
-          <option value="3" selected>${ARMOR_SETS[3].name}</option>
+          <option value="3">${ARMOR_SETS[3].name}</option>
         </select>
       </div>
       <div class="loadout-row">
@@ -68,11 +69,11 @@ export class LoadoutScreen {
         <select id="secondary-weapon-type">
           <option value="">None</option>
           <option value="staff">Staff</option>
-          <option value="bow">Bow</option>
+          <option value="bow" selected>Bow</option>
           <option value="halberd">Halberd</option>
         </select>
       </div>
-      <div class="loadout-row" id="secondary-tier-row" style="display:none">
+      <div class="loadout-row" id="secondary-tier-row" style="display:flex">
         <label>2nd Weapon Tier</label>
         <select id="secondary-weapon-tier">
           <option value="1">T1 (Basic)</option>
@@ -83,11 +84,11 @@ export class LoadoutScreen {
       <hr style="border-color:#4a2020;margin:10px 0">
       <div class="loadout-row">
         <label>Paddlefish</label>
-        <input type="number" id="paddlefish-count" min="0" max="28" value="12" style="width:60px;padding:4px;background:#1a0a0a;color:#e0d0c0;border:1px solid #4a2020;border-radius:3px;font-size:13px">
+        <input type="number" id="paddlefish-count" min="0" max="28" value="24" style="width:60px;padding:4px;background:#1a0a0a;color:#e0d0c0;border:1px solid #4a2020;border-radius:3px;font-size:13px">
       </div>
       <div class="loadout-row">
         <label>C. Paddlefish</label>
-        <input type="number" id="corrupted-paddlefish-count" min="0" max="28" value="4" style="width:60px;padding:4px;background:#1a0a0a;color:#e0d0c0;border:1px solid #4a2020;border-radius:3px;font-size:13px">
+        <input type="number" id="corrupted-paddlefish-count" min="0" max="28" value="0" style="width:60px;padding:4px;background:#1a0a0a;color:#e0d0c0;border:1px solid #4a2020;border-radius:3px;font-size:13px">
       </div>
       <div class="loadout-row">
         <label>Egniol Doses</label>
@@ -198,9 +199,69 @@ export class LoadoutScreen {
     fkeyInventory.addEventListener('change', validateFkeys);
     fkeyPrayer.addEventListener('change', validateFkeys);
     fkeyEquipment.addEventListener('change', validateFkeys);
+    const saveToStorage = () => {
+      try {
+        const data: Record<string, string> = {
+          armorTier: armorSelect.value,
+          weaponType: weaponTypeSelect.value,
+          weaponTier: weaponTierSelect.value,
+          secondaryWeaponType: secondaryTypeSelect.value,
+          secondaryWeaponTier: secondaryTierSelect.value,
+          paddlefishCount: paddlefishInput.value,
+          corruptedPaddlefishCount: corruptedInput.value,
+          egniolDoses: egniolInput.value,
+          fkeyInventory: fkeyInventory.value,
+          fkeyPrayer: fkeyPrayer.value,
+          fkeyEquipment: fkeyEquipment.value,
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      } catch { /* storage full or unavailable — silently ignore */ }
+    };
+
+    const restoreFromStorage = () => {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+        const data = JSON.parse(raw) as Record<string, string>;
+        if (typeof data !== 'object' || data === null) return;
+
+        if (data.armorTier != null) armorSelect.value = data.armorTier;
+        if (data.weaponType != null) weaponTypeSelect.value = data.weaponType;
+        if (data.weaponTier != null) weaponTierSelect.value = data.weaponTier;
+        if (data.paddlefishCount != null) paddlefishInput.value = data.paddlefishCount;
+        if (data.corruptedPaddlefishCount != null) corruptedInput.value = data.corruptedPaddlefishCount;
+        if (data.egniolDoses != null) egniolInput.value = data.egniolDoses;
+        if (data.fkeyInventory != null) fkeyInventory.value = data.fkeyInventory;
+        if (data.fkeyPrayer != null) fkeyPrayer.value = data.fkeyPrayer;
+        if (data.fkeyEquipment != null) fkeyEquipment.value = data.fkeyEquipment;
+
+        // Restore secondary weapon after updating options (which filters by primary)
+        updateSecondaryOptions();
+        if (data.secondaryWeaponType != null) {
+          secondaryTypeSelect.value = data.secondaryWeaponType;
+          secondaryTierRow.style.display = secondaryTypeSelect.value ? 'flex' : 'none';
+        }
+        if (data.secondaryWeaponTier != null) secondaryTierSelect.value = data.secondaryWeaponTier;
+      } catch { /* corrupted/missing data — fall back to HTML defaults */ }
+    };
+
+    restoreFromStorage();
     updateSecondaryOptions();
     updatePreview();
     updateSlotCount();
+
+    // Wire save into all form change events
+    armorSelect.addEventListener('change', saveToStorage);
+    weaponTypeSelect.addEventListener('change', saveToStorage);
+    weaponTierSelect.addEventListener('change', saveToStorage);
+    secondaryTypeSelect.addEventListener('change', saveToStorage);
+    secondaryTierSelect.addEventListener('change', saveToStorage);
+    paddlefishInput.addEventListener('input', saveToStorage);
+    corruptedInput.addEventListener('input', saveToStorage);
+    egniolInput.addEventListener('input', saveToStorage);
+    fkeyInventory.addEventListener('change', saveToStorage);
+    fkeyPrayer.addEventListener('change', saveToStorage);
+    fkeyEquipment.addEventListener('change', saveToStorage);
 
     startBtn.addEventListener('click', () => {
       if (!validateFkeys()) return;

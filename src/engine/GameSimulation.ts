@@ -211,9 +211,11 @@ export class GameSimulation {
     if (this.queuedAttackTarget !== undefined) {
       this.player.attackTarget = this.queuedAttackTarget;
       this.queuedAttackTarget = undefined;
-      // Setting attack target clears move queue
+      // Setting attack target clears move queue and any active targetTile.
+      // If already in range, the player should attack immediately without moving.
       if (this.player.attackTarget === 'boss') {
         this.queuedMove = null;
+        this.player.targetTile = null;
       }
     }
 
@@ -256,6 +258,7 @@ export class GameSimulation {
     // 3. Player movement (always, even during countdown)
     // Save previous position for interpolation (before any movement)
     this.player.prevPos = { ...this.player.pos };
+    this.player.midPos = null;
 
     // Auto-walk toward boss when target set and out of range
     if (this.player.attackTarget === 'boss' && !this.player.targetTile) {
@@ -268,17 +271,17 @@ export class GameSimulation {
     }
 
     if (this.player.targetTile) {
-      // Step 1
-      const step1 = findNextStep(
-        this.player.pos,
-        this.player.targetTile,
-        this.arena,
-        this.boss,
-      );
+      // Step 1: BFS pathfinding with OSRS direction order (W,E,S,N,SW,SE,NW,NE).
+      // Cardinal directions are explored first, so equal-length paths prefer
+      // cardinal steps — but diagonals are still used when they're shorter.
+      const step1 = findNextStep(this.player.pos, this.player.targetTile, this.arena, this.boss);
       this.player.pos = step1;
+
+      const moved1 = step1.x !== this.player.prevPos.x || step1.y !== this.player.prevPos.y;
+
       if (step1.x === this.player.targetTile.x && step1.y === this.player.targetTile.y) {
         this.player.targetTile = null;
-      } else {
+      } else if (moved1) {
         // Check if auto-walk reached range after step 1
         if (this.player.attackTarget === 'boss') {
           const weapon = this.player.loadout.weapon;
@@ -287,16 +290,18 @@ export class GameSimulation {
             this.player.targetTile = null;
           }
         }
-        // Step 2 (only if still have a target after step 1)
+        // Step 2 (running — only if still have a target after step 1)
         if (this.player.targetTile) {
-          const step2 = findNextStep(
-            this.player.pos,
-            this.player.targetTile,
-            this.arena,
-            this.boss,
-          );
-          this.player.pos = step2;
-          if (step2.x === this.player.targetTile.x && step2.y === this.player.targetTile.y) {
+          const step2 = findNextStep(this.player.pos, this.player.targetTile, this.arena, this.boss);
+
+          const moved2 = step2.x !== step1.x || step2.y !== step1.y;
+          if (moved2) {
+            // Store intermediate position for 3-point visual interpolation
+            this.player.midPos = { ...step1 };
+            this.player.pos = step2;
+          }
+
+          if (step2.x === this.player.targetTile?.x && step2.y === this.player.targetTile?.y) {
             this.player.targetTile = null;
           }
           // If we were auto-walking toward boss and now in range, clear targetTile

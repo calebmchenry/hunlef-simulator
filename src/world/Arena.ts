@@ -9,10 +9,10 @@ export class Arena {
     return x >= 0 && x < this.width && y >= 0 && y < this.height;
   }
 
-  isWalkable(x: number, y: number, boss: Boss): boolean {
-    if (!this.isInBounds(x, y)) return false;
-    if (boss.occupies(x, y)) return false;
-    return true;
+  isWalkable(x: number, y: number, _boss: Boss): boolean {
+    // Boss does NOT block movement — player can walk through the Hunlef.
+    // Stomps trigger when the player is under the boss during an attack tick.
+    return this.isInBounds(x, y);
   }
 
   /** Get player spawn position (south center) */

@@ -99,8 +99,14 @@ export class AnimationController {
       }
     });
 
-    // Start with idle
-    this.playIdle();
+    // Start idle animation directly — bypass crossFadeTo's same-state guard
+    // since currentState is already 'idle' at construction time.
+    const idleAction = this.actions.get('idle');
+    if (idleAction) {
+      idleAction.reset();
+      idleAction.play();
+      this.mixer.update(0);
+    }
   }
 
   playIdle(): void {
@@ -110,7 +116,11 @@ export class AnimationController {
 
   playAttack(style: 'magic' | 'ranged'): void {
     if (this.currentState === 'death') return;
-    const state: AnimState = style === 'magic' ? 'attack_magic' : 'attack_ranged';
+    // Use style_switch clips for attacks — the attack_magic/attack_ranged clips
+    // use a composite-model framemap (designed for body + weapon attachment) that
+    // produces distorted geometry on the body-only model. The style_switch clips
+    // use the correct body-only framemap and look clean.
+    const state: AnimState = style === 'magic' ? 'style_switch_mage' : 'style_switch_range';
     this.crossFadeTo(state);
   }
 
@@ -151,9 +161,8 @@ export class AnimationController {
     nextAction.play();
 
     if (prevAction && prevAction !== nextAction) {
-      // With one-hot morph target animations, crossfading blends two
-      // incompatible vertex configurations additively, causing an "explosion"
-      // effect. Stop the previous action immediately instead.
+      // Immediate stop keeps transitions deterministic for both morph and
+      // skeletal exports until dedicated clip blending is added.
       prevAction.stop();
     }
   }
