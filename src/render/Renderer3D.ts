@@ -792,7 +792,7 @@ export class Renderer3D {
   private loadBossGLTF(): void {
     const loader = new GLTFLoader();
     loader.load(
-      '/models/corrupted_hunlef.gltf',
+      `${import.meta.env.BASE_URL}models/corrupted_hunlef.gltf`,
       (gltf) => {
         // GLTF loaded successfully
         const model = gltf.scene;
@@ -838,7 +838,7 @@ export class Renderer3D {
   private loadTornadoGLTF(): void {
     const loader = new GLTFLoader();
     loader.load(
-      '/models/tornado.gltf',
+      `${import.meta.env.BASE_URL}models/tornado.gltf`,
       (gltf) => {
         this.applyUnlitMaterials(gltf.scene);
         // Harden texture filters for the tiny 40x4 tornado texture
@@ -887,14 +887,14 @@ export class Renderer3D {
         staff,
         halberd,
       ] = await Promise.all([
-        loader.loadAsync('/models/player_body_bow.gltf'),
-        loader.loadAsync('/models/player_body_staff.gltf'),
-        loader.loadAsync('/models/player_body_halberd.gltf'),
-        loader.loadAsync('/models/player_helm.gltf'),
-        loader.loadAsync('/models/player_legs.gltf'),
-        loader.loadAsync('/models/player_bow.gltf'),
-        loader.loadAsync('/models/player_staff.gltf'),
-        loader.loadAsync('/models/player_halberd.gltf'),
+        loader.loadAsync(`${import.meta.env.BASE_URL}models/player_body_bow.gltf`),
+        loader.loadAsync(`${import.meta.env.BASE_URL}models/player_body_staff.gltf`),
+        loader.loadAsync(`${import.meta.env.BASE_URL}models/player_body_halberd.gltf`),
+        loader.loadAsync(`${import.meta.env.BASE_URL}models/player_helm.gltf`),
+        loader.loadAsync(`${import.meta.env.BASE_URL}models/player_legs.gltf`),
+        loader.loadAsync(`${import.meta.env.BASE_URL}models/player_bow.gltf`),
+        loader.loadAsync(`${import.meta.env.BASE_URL}models/player_staff.gltf`),
+        loader.loadAsync(`${import.meta.env.BASE_URL}models/player_halberd.gltf`),
       ]);
 
       retargetMorphAnimations(bodyBow.scene, bodyBow.animations);
