@@ -53,9 +53,13 @@ export class InputManager {
   }
 
   private handleKey(e: KeyboardEvent): void {
+    // Prevent default browser behavior for F keys used in gameplay
+    if (/^F\d+$/.test(e.key)) {
+      e.preventDefault();
+    }
+
     const tab = this.keyBindManager.getTabForKey(e.key);
     if (tab) {
-      e.preventDefault();
       if (this.sidePanel) {
         this.sidePanel.switchTab(tab as TabId);
       }
